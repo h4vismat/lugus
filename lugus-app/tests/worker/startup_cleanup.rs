@@ -148,3 +148,13 @@ async fn startup_registration_preserves_cleanup_failure_precedence() {
         assert_eq!(error.kind, expected, "cleanup_fails={cleanup_fails}");
     }
 }
+
+#[async_trait]
+impl lugus_financial::instruments::InstrumentProvider for RegistrationFailureProvider {
+    async fn lookup_instrument(
+        &mut self,
+        q: &lugus_financial::instruments::InstrumentLookup,
+    ) -> FinancialResult<lugus_financial::instruments::InstrumentMetadata> {
+        self.inner.lookup_instrument(q).await
+    }
+}

@@ -3,13 +3,14 @@ use lugus_financial::domain::ProviderIdentity;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, btree_map::Entry};
 
-const SUPPORTED: [(Operation, &str, u32); 6] = [
+const SUPPORTED: [(Operation, &str, u32); 7] = [
     (Operation::Resolve, "company_resolution", 1),
     (Operation::Lookup, "company_resolution", 1),
     (Operation::Filings, "filings", 1),
     (Operation::Facts, "fundamentals", 1),
     (Operation::Document, "filings", 1),
     (Operation::Prices, "market_data", 1),
+    (Operation::InstrumentLookup, "instrument_lookup", 1),
 ];
 
 #[derive(Debug, Clone)]

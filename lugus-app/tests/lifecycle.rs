@@ -315,3 +315,13 @@ async fn startup_cleanup_failure_after_shutdown_fence_is_not_lost() {
     );
     reaped(root.path()).await;
 }
+
+#[async_trait]
+impl lugus_financial::instruments::InstrumentProvider for Peer {
+    async fn lookup_instrument(
+        &mut self,
+        q: &lugus_financial::instruments::InstrumentLookup,
+    ) -> FinancialResult<lugus_financial::instruments::InstrumentMetadata> {
+        self.inner.lookup_instrument(q).await
+    }
+}

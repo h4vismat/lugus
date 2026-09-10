@@ -21,6 +21,7 @@ impl SqliteApplicationStore {
         let receipt = self.read_fetch(scope, id)?;
         json(&projection, self.limits.max_input_bytes)?;
         let mut header = DatasetHeader {
+            binding_id: receipt.binding_id.clone(),
             id: self.id()?,
             workspace_id: scope.workspace_id.clone(),
             repository_id: receipt.repository_id.clone(),

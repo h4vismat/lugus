@@ -22,7 +22,11 @@ use std::{
 
 #[async_trait]
 pub trait ManagedProvider:
-    FilingsProvider + FundamentalsProvider + MarketDataProvider + CompanyResolutionProvider
+    FilingsProvider
+    + FundamentalsProvider
+    + MarketDataProvider
+    + CompanyResolutionProvider
+    + lugus_financial::instruments::InstrumentProvider
 {
     fn capabilities(&self) -> &BTreeMap<String, u32>;
     fn is_running(&self) -> bool;
@@ -81,7 +85,12 @@ impl ProviderFactory for ProcessProviderFactory {
     }
 }
 
-pub trait WorkerRepository: Repository + MarketRepository + CatalogRepository {
+pub trait WorkerRepository:
+    Repository
+    + MarketRepository
+    + CatalogRepository
+    + lugus_financial::instruments::InstrumentRepository
+{
     fn repository_identity(&self) -> FinancialResult<String>;
     fn bounded_resolution_outcome(
         &self,

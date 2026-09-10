@@ -50,11 +50,14 @@ impl SqliteApplicationStore {
                 ));
             }
             tx.execute_batch("CREATE TABLE app_records(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repository TEXT NOT NULL,category TEXT NOT NULL,payload TEXT NOT NULL); CREATE TABLE dataset_rows(dataset_id TEXT NOT NULL REFERENCES app_records(id),ordinal INTEGER NOT NULL,payload TEXT NOT NULL,observation_id INTEGER,PRIMARY KEY(dataset_id,ordinal)); CREATE TABLE view_requests(workspace TEXT NOT NULL,request TEXT NOT NULL,input TEXT NOT NULL,view_id TEXT NOT NULL REFERENCES app_records(id),PRIMARY KEY(workspace,request)); PRAGMA application_id=1280657235; PRAGMA user_version=1;").map_err(storage)?;
-        } else if version != 1 || application != 1280657235 {
+        } else if !(1..=2).contains(&version) || application != 1280657235 {
             return Err(error(
                 ErrorKind::Storage,
                 "unsupported application database schema",
             ));
+        }
+        if version < 2 {
+            super::binding_history::migrate(&tx)?;
         }
         tx.commit().map_err(storage)?;
         Ok(Self {
@@ -132,6 +135,29 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     }
 }
 impl ApplicationStore for SqliteApplicationStore {
+    fn bind(&mut self, s: &Scope, r: &BindRequest) -> Result<BindingRecord> {
+        self.create_binding(s, r)
+    }
+    fn read_binding(&self, s: &Scope, id: &str) -> Result<BindingView> {
+        self.binding_view(s, id)
+    }
+    fn list_bindings(&self, s: &Scope, p: PageRequest) -> Result<BindingPage> {
+        self.binding_page(s, p)
+    }
+    fn revoke_binding(&mut self, s: &Scope, r: &RevokeBindingRequest) -> Result<BindingView> {
+        self.revoke(s, r)
+    }
+    fn prepare_binding(&self, s: &Scope, id: &str) -> Result<BindingRecord> {
+        let view = self.binding_view(s, id)?;
+        if view.status != BindingStatus::Active {
+            return Err(error(ErrorKind::Conflict, "binding is no longer active"));
+        }
+        Ok(view.record)
+    }
+    fn binding_history(&self, s: &Scope, id: &str, p: PageRequest) -> Result<BindingHistoryPage> {
+        self.history(s, id, p)
+    }
+
     fn record_fetch(&mut self, result: &FetchResult) -> Result<FetchReference> {
         let p = &result.provenance;
         p.scope.validate()?;
@@ -155,11 +181,12 @@ impl ApplicationStore for SqliteApplicationStore {
             Operation::Lookup => (Some(RunKind::Resolution), 1),
             Operation::Filings | Operation::Facts => (Some(RunKind::Financial), 1),
             Operation::Prices => (Some(RunKind::Market), 1),
-            Operation::Document => (None, 0),
+            Operation::Document | Operation::InstrumentLookup => (None, 0),
         };
         if p.runs.len() > max_runs || p.runs.iter().any(|r| r.id <= 0 || Some(r.kind) != run_kind) {
             return Err(error(ErrorKind::InvalidInput, "invalid fetch run receipts"));
         }
+        self.validate_binding_provenance(p, result.error.is_some())?;
         let reference = FetchReference {
             id: self.id()?,
             scope: p.scope.clone(),
@@ -168,6 +195,8 @@ impl ApplicationStore for SqliteApplicationStore {
             command: p.command.clone(),
             runs: p.runs.clone(),
             document: p.document.clone(),
+            instrument_observation: p.instrument_observation.clone(),
+            binding_id: p.binding_id.clone(),
             error: safe_error(&result.error),
             created_at: self.clock.now(),
         };

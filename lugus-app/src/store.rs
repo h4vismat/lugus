@@ -1,4 +1,7 @@
 //! Application persistence port and bounded SQLite adapter.
+mod binding_history;
+mod binding_reads;
+mod bindings;
 mod evidence;
 mod freeze;
 mod sqlite;
@@ -9,6 +12,22 @@ use lugus_financial::resolution::catalog::CatalogSelection;
 pub use sqlite::SqliteApplicationStore;
 
 pub trait ApplicationStore: Send {
+    fn bind(&mut self, scope: &Scope, request: &BindRequest) -> Result<BindingRecord>;
+    fn read_binding(&self, scope: &Scope, id: &str) -> Result<BindingView>;
+    fn list_bindings(&self, scope: &Scope, page: PageRequest) -> Result<BindingPage>;
+    fn revoke_binding(
+        &mut self,
+        scope: &Scope,
+        request: &RevokeBindingRequest,
+    ) -> Result<BindingView>;
+    fn prepare_binding(&self, scope: &Scope, id: &str) -> Result<BindingRecord>;
+    fn binding_history(
+        &self,
+        scope: &Scope,
+        id: &str,
+        page: PageRequest,
+    ) -> Result<BindingHistoryPage>;
+
     /// Trusted host import: never expose raw run receipt registration as an agent tool.
     fn record_fetch(&mut self, result: &FetchResult) -> Result<FetchReference>;
     fn read_fetch(&self, scope: &Scope, id: &str) -> Result<FetchReference>;

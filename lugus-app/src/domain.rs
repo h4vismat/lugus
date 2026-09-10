@@ -115,6 +115,7 @@ pub enum Operation {
     Facts,
     Document,
     Prices,
+    InstrumentLookup,
 }
 
 impl Operation {
@@ -124,6 +125,7 @@ impl Operation {
             Self::Filings | Self::Document => ("filings", 1),
             Self::Facts => ("fundamentals", 1),
             Self::Prices => ("market_data", 1),
+            Self::InstrumentLookup => ("instrument_lookup", 1),
         }
     }
 }
@@ -151,6 +153,10 @@ pub enum FetchCommand {
         instance_id: String,
         source_url: String,
     },
+    InstrumentLookup {
+        instance_id: String,
+        query: lugus_financial::instruments::InstrumentLookup,
+    },
     Prices {
         instance_id: String,
         query: PriceQuery,
@@ -168,6 +174,7 @@ impl FetchCommand {
             | Self::Filings { instance_id, .. }
             | Self::Facts { instance_id, .. }
             | Self::Document { instance_id, .. }
+            | Self::InstrumentLookup { instance_id, .. }
             | Self::Prices { instance_id, .. } => instance_id,
         }
     }
@@ -180,6 +187,7 @@ impl FetchCommand {
             Self::Facts { .. } => Operation::Facts,
             Self::Document { .. } => Operation::Document,
             Self::Prices { .. } => Operation::Prices,
+            Self::InstrumentLookup { .. } => Operation::InstrumentLookup,
         }
     }
 
@@ -192,6 +200,7 @@ impl FetchCommand {
             ));
         }
         match self {
+            Self::InstrumentLookup { query, .. } => map_validation(query.validate()),
             Self::Resolve { input, .. } => require_text(input, "invalid resolution input"),
             Self::Lookup { request, .. } => map_validation(request.validate()),
             Self::Filings { query, .. } | Self::Facts { query, .. } => {
@@ -274,6 +283,10 @@ enum StrictFetchCommand {
     Document {
         instance_id: String,
         source_url: String,
+    },
+    InstrumentLookup {
+        instance_id: String,
+        query: lugus_financial::instruments::InstrumentLookup,
     },
     Prices {
         instance_id: String,
@@ -404,6 +417,9 @@ impl<'de> Deserialize<'de> for FetchCommand {
                 instance_id,
                 source_url,
             },
+            StrictFetchCommand::InstrumentLookup { instance_id, query } => {
+                Self::InstrumentLookup { instance_id, query }
+            }
             StrictFetchCommand::Prices { instance_id, query } => Self::Prices {
                 instance_id,
                 query: query.into(),

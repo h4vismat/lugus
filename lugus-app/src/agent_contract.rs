@@ -8,7 +8,12 @@ use std::{
     io::{self, Write},
 };
 
-const OPERATIONS: [(Operation, &str, &str); 6] = [
+const OPERATIONS: [(Operation, &str, &str); 7] = [
+    (
+        Operation::InstrumentLookup,
+        "lugus_lookup_instrument",
+        "Look up source instrument identity through the selected provider.",
+    ),
     (
         Operation::Resolve,
         "lugus_resolve_company",
@@ -62,6 +67,10 @@ pub fn fetch_tool_specs(offering: &Offering) -> Vec<ToolSpec> {
                 Operation::Document => ("source_url", text_schema(FetchCommand::MAX_TEXT_BYTES)),
                 Operation::Filings | Operation::Facts => ("query", financial_query_schema()),
                 Operation::Prices => ("query", price_query_schema()),
+                Operation::InstrumentLookup => (
+                    "query",
+                    object_schema([("instrument", identifier_schema())], &["instrument"]),
+                ),
             };
             Some(ToolSpec {
                 name: (*name).into(),

@@ -17,7 +17,7 @@ for line in sys.stdin:
         (root / 'pid').write_text(str(os.getpid()))
         result = {'protocol_version': 2 if mode == 'startup_failure' else 1,
                   'plugin_id': 'worker-fixture', 'plugin_version': '1',
-                  'capabilities': {'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1}}
+                  'capabilities': {'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1, 'instrument_lookup': 2 if mode == 'instrument_unsupported' else 1}}
     else:
         cursor = params.get('cursor')
         (root / ('second' if cursor else 'first')).touch()
@@ -35,6 +35,8 @@ for line in sys.stdin:
             result.update(snapshot='fixture-snapshot', coverage='fixture universe')
         elif method == 'company_resolution.lookup':
             result = {'identifier': params['identifier'], 'name': 'Fixture', 'aliases': [], 'listings': [], 'source_url': 'https://example.test/company', 'source_checksum': 'a' * 64, 'retrieved_at': '2026-09-09T00:00:00Z', 'match_reasons': []}
+        elif method == 'instrument_lookup.lookup':
+            result = {'instrument': {'namespace':'yahoo:symbol','value':'AAPL'},'issuer_name':'Apple Inc.','ticker':'AAPL','exchange':{'namespace':'yahoo:exchange','value':'NMS'},'kind':'equity','issuer_identifiers':[],'source_url':'https://example.test/instrument','source_checksum':'b'*64,'retrieved_at':'2026-09-09T00:00:00Z'}
         elif method == 'market_data.daily':
             result = {'items': [{'instrument': params['instrument'], 'date': '2024-01-02', 'open': '100', 'high': '102', 'low': '99', 'close': '101', 'volume': 123, 'adjusted_close': '100.5', 'currency': 'USD', 'exchange_timezone': 'America/New_York', 'price_basis': 'source_reported', 'precision': 'decimal_source', 'source_url': 'https://example.test/history', 'retrieved_at': '2026-09-09T00:00:00Z'}], 'next_cursor': None, 'coverage': {'first_date': '2024-01-02', 'last_date': '2024-01-02', 'completeness': 'unverified'}}
             if mode == 'market_repeated_date' and not cursor:

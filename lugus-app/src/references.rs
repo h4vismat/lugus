@@ -31,6 +31,10 @@ pub struct FetchReference {
     pub command: FetchCommand,
     pub runs: Vec<RunReceipt>,
     pub document: Option<DocumentObservation>,
+    #[serde(default)]
+    pub instrument_observation: Option<lugus_financial::instruments::InstrumentObservation>,
+    #[serde(default)]
+    pub binding_id: Option<String>,
     pub error: Option<AppError>,
     pub created_at: DateTime<Utc>,
 }
@@ -56,6 +60,8 @@ pub enum DatasetProjection {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetHeader {
+    #[serde(default)]
+    pub binding_id: Option<String>,
     pub id: String,
     pub workspace_id: String,
     pub repository_id: String,

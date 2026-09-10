@@ -10,6 +10,12 @@ use lugus_financial::{
 };
 pub trait EvidenceRepository: Send {
     fn repository_identity(&self) -> Result<String>;
+    fn instrument_observation(
+        &self,
+        p: &ProviderIdentity,
+        id: i64,
+        limits: ReadLimits,
+    ) -> Result<lugus_financial::instruments::InstrumentObservation>;
     fn financial_run(
         &self,
         p: &ProviderIdentity,
@@ -55,6 +61,15 @@ fn bounded(e: BoundedReadError) -> AppError {
     }
 }
 impl EvidenceRepository for SqliteRepository {
+    fn instrument_observation(
+        &self,
+        p: &ProviderIdentity,
+        id: i64,
+        limits: ReadLimits,
+    ) -> Result<lugus_financial::instruments::InstrumentObservation> {
+        self.bounded_instrument_observation(p, id, limits)
+            .map_err(bounded)
+    }
     fn repository_identity(&self) -> Result<String> {
         self.bounded_repository_identity(256).map_err(bounded)
     }

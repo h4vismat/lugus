@@ -50,6 +50,10 @@ pub struct FetchProvenance {
     pub command: FetchCommand,
     pub runs: Vec<RunReceipt>,
     pub document: Option<DocumentObservation>,
+    #[serde(default)]
+    pub instrument_observation: Option<lugus_financial::instruments::InstrumentObservation>,
+    #[serde(default)]
+    pub binding_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchResult {
@@ -339,6 +343,8 @@ impl WorkerHandle {
                 command,
                 runs: vec![],
                 document: None,
+                instrument_observation: None,
+                binding_id: None,
             },
             generation: self.generation,
             deadline: Instant::now() + self.limits.operation_timeout,
@@ -487,6 +493,7 @@ async fn execute_job(
         inner: repo,
         runs: vec![],
         document: None,
+        instrument_observation: None,
         read_limits: lugus_financial::storage::bounded::ReadLimits {
             max_items: limits.max_items_per_fetch,
             max_bytes: limits.max_bytes_per_fetch,
@@ -538,6 +545,7 @@ async fn execute_job(
     };
     job.provenance.runs = recording.runs;
     job.provenance.document = recording.document;
+    job.provenance.instrument_observation = recording.instrument_observation;
     let interrupted = error
         .as_ref()
         .into_iter()
@@ -571,6 +579,12 @@ async fn fetch(
             return application::ingest_facts(repo, provider, query)
                 .await
                 .map(|_| ());
+        }
+        FetchCommand::InstrumentLookup { query, .. } => {
+            use lugus_financial::instruments::{InstrumentProvider, InstrumentRepository};
+            let metadata = provider.lookup_instrument(query).await?;
+            repo.save_instrument_observation(provider.inner.identity(), query, &metadata)?;
+            return Ok(());
         }
         FetchCommand::Prices { query, .. } => {
             return application::market::ingest_prices(repo, provider, query)

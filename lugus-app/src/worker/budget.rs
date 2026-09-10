@@ -176,3 +176,19 @@ impl CompanyResolutionProvider for BoundedProvider<'_> {
         Ok(candidate)
     }
 }
+
+#[async_trait]
+impl lugus_financial::instruments::InstrumentProvider for BoundedProvider<'_> {
+    async fn lookup_instrument(
+        &mut self,
+        query: &lugus_financial::instruments::InstrumentLookup,
+    ) -> Result<lugus_financial::instruments::InstrumentMetadata> {
+        let metadata = self
+            .budget
+            .call(self.inner.lookup_instrument(query))
+            .await?;
+        metadata.validate_for(query)?;
+        self.budget.accept(&metadata, 1)?;
+        Ok(metadata)
+    }
+}

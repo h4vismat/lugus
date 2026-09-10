@@ -770,3 +770,85 @@ async fn resolution_failure_outranks_historical_read_limit() {
         assert_eq!(status, "failed");
     }
 }
+fn instrument_command() -> FetchCommand {
+    FetchCommand::InstrumentLookup {
+        instance_id: "fixture".into(),
+        query: lugus_financial::instruments::InstrumentLookup {
+            instrument: lugus_financial::market_data::InstrumentId {
+                namespace: "yahoo:symbol".into(),
+                value: "AAPL".into(),
+            },
+        },
+    }
+}
+#[tokio::test]
+async fn instrument_lookup_records_one_exact_observation_without_a_run() {
+    let h = Harness::start(
+        "ok",
+        Limits {
+            max_items_per_fetch: 1,
+            max_read_page_items: 1,
+            ..Limits::default()
+        },
+    )
+    .await;
+    let r = h
+        .submit(instrument_command())
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert!(r.provenance.runs.is_empty());
+    let o = r.provenance.instrument_observation.unwrap();
+    assert_eq!(o.metadata.issuer_name.as_deref(), Some("Apple Inc."));
+    let repo = SqliteRepository::open(&h.db).unwrap();
+    assert_eq!(
+        repo.bounded_instrument_observation(
+            &o.provider,
+            o.id,
+            lugus_financial::storage::bounded::ReadLimits {
+                max_items: 1,
+                max_bytes: 10000
+            }
+        )
+        .unwrap(),
+        o
+    );
+    h.worker.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn instrument_lookup_failure_budget_and_cancel_do_not_fabricate_evidence() {
+    for mode in ["source_error", "ok", "blocked"] {
+        let mut limits = Limits::default();
+        if mode == "ok" {
+            limits.max_bytes_per_fetch = 100;
+            limits.max_document_bytes = 100;
+        }
+        let h = Harness::start(mode, limits).await;
+        let job = h.submit(instrument_command()).unwrap();
+        if mode == "blocked" {
+            barrier(&h.barrier, "first").await;
+            job.cancel();
+        }
+        let r = job.wait().await.unwrap();
+        assert_eq!(
+            r.error.unwrap().kind,
+            match mode {
+                "source_error" => ErrorKind::RateLimited,
+                "ok" => ErrorKind::ResourceLimit,
+                _ => ErrorKind::Cancelled,
+            }
+        );
+        assert!(r.provenance.runs.is_empty());
+        assert!(r.provenance.instrument_observation.is_none());
+        h.worker.shutdown().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn instrument_lookup_rejects_unsupported_version_before_dispatch() {
+    let h = Harness::start("instrument_unsupported", Limits::default()).await;
+    assert!(matches!(h.submit(instrument_command()),Err(e) if e.kind==ErrorKind::Unsupported));
+    assert!(!h.barrier.join("first").exists());
+    h.worker.shutdown().await.unwrap();
+}

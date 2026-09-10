@@ -131,6 +131,8 @@ fn receipt(repo: &SqliteRepository, run: i64) -> FetchResult {
                 id: run,
             }],
             document: None,
+            instrument_observation: None,
+            binding_id: None,
         },
         error: None,
     }

@@ -29,3 +29,6 @@ pub mod agent;
 pub use agent::*;
 pub mod config;
 pub use config::*;
+
+pub mod bindings;
+pub use bindings::*;

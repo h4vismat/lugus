@@ -28,6 +28,7 @@ pub(super) struct Recording<'a> {
     pub inner: &'a mut dyn WorkerRepository,
     pub runs: Vec<RunReceipt>,
     pub document: Option<DocumentObservation>,
+    pub instrument_observation: Option<lugus_financial::instruments::InstrumentObservation>,
     pub read_limits: ReadLimits,
     pub read_limited: Cell<bool>,
     pub finalization_failed: Cell<bool>,
@@ -181,5 +182,20 @@ impl CatalogRepository for Recording<'_> {
     }
     fn catalog_history(&self, company: CatalogCompanyId) -> Result<Vec<CatalogRetrieval>> {
         self.inner.catalog_history(company)
+    }
+}
+
+impl lugus_financial::instruments::InstrumentRepository for Recording<'_> {
+    fn save_instrument_observation(
+        &mut self,
+        provider: &ProviderIdentity,
+        request: &lugus_financial::instruments::InstrumentLookup,
+        metadata: &lugus_financial::instruments::InstrumentMetadata,
+    ) -> Result<lugus_financial::instruments::InstrumentObservation> {
+        let observation = self
+            .inner
+            .save_instrument_observation(provider, request, metadata)?;
+        self.instrument_observation = Some(observation.clone());
+        Ok(observation)
     }
 }
