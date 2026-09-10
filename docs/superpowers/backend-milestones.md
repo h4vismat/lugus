@@ -4,11 +4,11 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The next milestone is **active-workspace background refresh** (milestone 5). HTML filing text and passage references are implemented on local branch `codex/filing-passages` in `/private/tmp/lugus-backend-development`, through `d9df02c` plus completion documentation. This branch includes the completed runtime, resolution/selection, company-to-market binding and durable conversations. It remains local and unmerged. Read the application README and completed filing-passages plan before designing the next milestone.
+The next milestone is **active-workspace background refresh** (milestone 5). HTML filing text and passage references, together with their prerequisite backend milestones, were merged locally into `main` by fast-forward to `1c6f782` on 2026-09-10. The implementation is now available in the main checkout at `/Users/havismat/lugus`. Read the application README and completed filing-passages plan before designing the next milestone.
 
-First check repository/branch state. Company resolution and observation selection were implemented in `eea83bf`; application runtime and lifecycle fixes extend through `403aa1d`, with its completion documentation at `781a539`. Binding work builds on that commit. These features have not been merged into `main`; do not infer missing implementation from a checkout of `main`, repeat the work, or overwrite pending documents. Temporary worktree paths may change; branch and commit identify the implementation.
+The source branch `codex/filing-passages` and existing worktree `/private/tmp/lugus-backend-development` are preserved. Earlier implementation plans record their original branch/worktree state as historical context; do not repeat completed work based on those pre-merge notes. Pending unrelated files in the main checkout were preserved.
 
-Integration into `main` is a separate action; this document does not authorize publishing, pushing, or merging.
+This integration was local only. Nothing was pushed or published; publishing remains a separate action.
 
 ## Established product and architectural decisions
 
