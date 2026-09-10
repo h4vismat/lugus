@@ -94,10 +94,12 @@ impl CodexProcess {
             });
         }
 
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            self.unusable = true;
-            Error::Process("process stdin is unavailable".into())
-        })?;
+        // A dropped write future can have emitted a prefix of this frame. Keep
+        // the transport unusable until the delimiter and flush both complete.
+        self.unusable = true;
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(Error::Process("process stdin is unavailable".into()));
+        };
         let deadline = self.limits.request_timeout;
         let write = async {
             stdin.write_all(&encoded).await.map_err(process_error)?;
@@ -106,7 +108,10 @@ impl CodexProcess {
         };
 
         match tokio::time::timeout(deadline, write).await {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => {
+                self.unusable = false;
+                Ok(())
+            }
             Ok(Err(error)) => {
                 self.unusable = true;
                 self.stdin.take();
@@ -122,6 +127,7 @@ impl CodexProcess {
 
     pub(super) async fn receive(&mut self) -> Result<Value> {
         self.ensure_usable()?;
+        let deadline = tokio::time::Instant::now() + self.limits.request_timeout;
 
         loop {
             if let Some(frame) = self.take_complete_frame()? {
@@ -131,11 +137,8 @@ impl CodexProcess {
             let remaining = self.limits.max_frame_bytes + 1 - self.pending_frame.len();
             let mut bytes = [0_u8; 8192];
             let capacity = remaining.min(bytes.len());
-            let read = tokio::time::timeout(
-                self.limits.request_timeout,
-                self.stdout.read(&mut bytes[..capacity]),
-            )
-            .await;
+            let read =
+                tokio::time::timeout_at(deadline, self.stdout.read(&mut bytes[..capacity])).await;
 
             let count = match read {
                 Ok(Ok(count)) => count,
@@ -169,11 +172,18 @@ impl CodexProcess {
         }
         self.child.take();
 
-        if let Some(stderr_drain) = self.stderr_drain.take()
-            && let Err(error) = stderr_drain.await
-            && result.is_ok()
-        {
-            result = Err(Error::Process(format!("stderr drain task failed: {error}")));
+        if let Some(mut stderr_drain) = self.stderr_drain.take() {
+            match tokio::time::timeout(self.limits.shutdown_grace, &mut stderr_drain).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if result.is_ok() => {
+                    result = Err(Error::Process(format!("stderr drain task failed: {error}")));
+                }
+                Ok(Err(_)) => {}
+                Err(_) => {
+                    stderr_drain.abort();
+                    let _ = stderr_drain.await;
+                }
+            }
         }
 
         result
@@ -352,6 +362,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn receive_deadline_is_not_reset_by_a_slow_trickle() {
+        let mut short_limits = limits();
+        short_limits.request_timeout = Duration::from_millis(500);
+        let mut process = spawn("slow_trickle", short_limits).unwrap();
+
+        let result = tokio::time::timeout(Duration::from_millis(800), process.receive())
+            .await
+            .expect("receive must enforce one deadline across all chunks");
+        assert!(matches!(result, Err(Error::Timeout)));
+        process.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn eof_makes_the_transport_unusable() {
         let mut process = spawn("eof", limits()).unwrap();
 
@@ -382,6 +405,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cancelled_write_does_not_leave_the_transport_reusable() {
+        let mut write_limits = limits();
+        write_limits.max_frame_bytes = 1024 * 1024;
+        let mut process = spawn("blocked_stdin", write_limits).unwrap();
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                process.send(&json!({"id": 3, "body": "x".repeat(128 * 1024)})),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            matches!(process.send(&json!({"id": 4})).await, Err(Error::Process(message)) if message.contains("unusable"))
+        );
+        process.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn drains_flooded_stderr_while_receiving_stdout() {
         let mut process = spawn("stderr_flood", limits()).unwrap();
 
@@ -402,6 +445,19 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), process.close())
             .await
             .expect("close must reap the child")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_does_not_wait_forever_for_a_stderr_inheriting_descendant() {
+        let mut short_limits = limits();
+        short_limits.shutdown_grace = Duration::from_millis(50);
+        let mut process = spawn("stderr_descendant", short_limits).unwrap();
+
+        assert_eq!(process.receive().await.unwrap(), json!({"ready": true}));
+        tokio::time::timeout(Duration::from_millis(300), process.close())
+            .await
+            .expect("close must bound the stderr drain join")
             .unwrap();
     }
 
