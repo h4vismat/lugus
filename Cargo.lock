@@ -329,6 +329,7 @@ dependencies = [
  "chrono",
  "lugus-agent",
  "lugus-financial",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

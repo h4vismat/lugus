@@ -1,0 +1,84 @@
+//! Application persistence port and bounded SQLite adapter.
+mod evidence;
+mod freeze;
+mod sqlite;
+mod views;
+use crate::*;
+pub use evidence::EvidenceRepository;
+use lugus_financial::resolution::catalog::CatalogSelection;
+pub use sqlite::SqliteApplicationStore;
+
+pub trait ApplicationStore: Send {
+    /// Trusted host import: never expose raw run receipt registration as an agent tool.
+    fn record_fetch(&mut self, result: &FetchResult) -> Result<FetchReference>;
+    fn read_fetch(&self, scope: &Scope, id: &str) -> Result<FetchReference>;
+    fn create_dataset(
+        &mut self,
+        scope: &Scope,
+        fetch_id: &str,
+        projection: DatasetProjection,
+    ) -> Result<DatasetHeader>;
+    fn dataset_header(&self, scope: &Scope, id: &str) -> Result<DatasetHeader>;
+    fn read_dataset(&self, scope: &Scope, id: &str, page: PageRequest) -> Result<DatasetPage>;
+    fn read_document(
+        &self,
+        scope: &Scope,
+        id: &str,
+        offset: usize,
+        length: usize,
+    ) -> Result<DocumentRead>;
+    fn select_candidate(
+        &mut self,
+        scope: &Scope,
+        id: &str,
+        observation_id: i64,
+    ) -> Result<CatalogSelection>;
+    fn open_view(&mut self, scope: &Scope, request: &OpenViewRequest) -> Result<ViewReceipt>;
+    fn read_view(&self, scope: &Scope, id: &str) -> Result<ViewReceipt>;
+    fn report_presentation(&mut self, scope: &Scope, result: &PresentationResult) -> Result<()>;
+}
+fn error(kind: ErrorKind, message: &'static str) -> AppError {
+    AppError::new(kind, message, false)
+}
+fn storage(_: impl std::fmt::Display) -> AppError {
+    error(ErrorKind::Storage, "application storage operation failed")
+}
+fn limit() -> AppError {
+    error(
+        ErrorKind::ResourceLimit,
+        "reference exceeds configured bounds",
+    )
+}
+fn json<T: serde::Serialize>(value: &T, max: usize) -> Result<String> {
+    // Write through a capped sink so serialization cannot allocate unbounded output.
+    struct Capped {
+        bytes: Vec<u8>,
+        max: usize,
+    }
+    impl std::io::Write for Capped {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.max.saturating_sub(self.bytes.len()) {
+                return Err(std::io::Error::other("limit"));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = Capped {
+        bytes: Vec::new(),
+        max,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|_| limit())?;
+    String::from_utf8(writer.bytes).map_err(storage)
+}
+fn safe_error(error: &Option<AppError>) -> Option<AppError> {
+    error.as_ref().map(|e| AppError {
+        kind: e.kind,
+        message: "fetch did not complete successfully".into(),
+        retryable: e.retryable,
+        retry_after_seconds: e.retry_after_seconds,
+    })
+}

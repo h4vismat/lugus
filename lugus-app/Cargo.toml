@@ -13,6 +13,7 @@ lugus-financial = { path = "../lugus-financial" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

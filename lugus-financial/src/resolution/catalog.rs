@@ -109,7 +109,7 @@ fn invalid(message: &str) -> Error {
     Error::new(ErrorKind::InvalidRequest, message)
 }
 impl SqliteRepository {
-    fn catalog_records(
+    pub(crate) fn catalog_records(
         &self,
         run: Option<i64>,
         company: Option<CatalogCompanyId>,

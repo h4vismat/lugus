@@ -18,13 +18,21 @@ impl SqliteRepository {
         run: i64,
         limits: ReadLimits,
     ) -> ReadResult<ResolutionOutcome> {
+        self.with_bounded_resolution(run, limits, |repo| repo.resolution_outcome(run))
+    }
+    pub(super) fn with_bounded_resolution<T>(
+        &self,
+        run: i64,
+        limits: ReadLimits,
+        read: impl FnOnce(&Self) -> crate::error::Result<T>,
+    ) -> ReadResult<T> {
         limits.validate()?;
         if run <= 0 {
             return Err(Error::new(ErrorKind::InvalidRequest, "positive run ID required").into());
         }
         let transaction = self.connection.unchecked_transaction()?;
         let metadata:i64=transaction.query_row(
-            "SELECT length(CAST(request AS BLOB))+length(CAST(status AS BLOB))+coalesce(length(CAST(snapshot AS BLOB)),0)+coalesce(length(CAST(coverage AS BLOB)),0)+coalesce(length(CAST(error AS BLOB)),0)+coalesce(length(CAST(failure AS BLOB)),0) FROM resolution_runs WHERE id=?1",
+            "SELECT length(CAST(provider AS BLOB))+length(CAST(request AS BLOB))+length(CAST(status AS BLOB))+coalesce(length(CAST(snapshot AS BLOB)),0)+coalesce(length(CAST(coverage AS BLOB)),0)+coalesce(length(CAST(error AS BLOB)),0)+coalesce(length(CAST(failure AS BLOB)),0) FROM resolution_runs WHERE id=?1",
             [run],|row|row.get(0)).optional()?.ok_or_else(||Error::new(ErrorKind::NotFound,"resolution run not found"))?;
         let row_limit = limits.max_items as i64;
         let (count,bytes):(i64,i64)=transaction.query_row(
@@ -36,7 +44,7 @@ impl SqliteRepository {
         if count > row_limit || bytes < 0 || bytes as u64 > limits.max_bytes as u64 {
             return Err(BoundedReadError::LimitExceeded);
         }
-        let result = self.resolution_outcome(run)?;
+        let result = read(self)?;
         transaction.commit()?;
         Ok(result)
     }

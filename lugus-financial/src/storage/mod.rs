@@ -2,6 +2,8 @@
 pub mod selection;
 pub mod bounded;
 mod bounded_resolution;
+mod reference_reads;
+pub use reference_reads::ScopedResolutionEvidence;
 use crate::{
     domain::*,
     error::{Error, ErrorKind, Result},
