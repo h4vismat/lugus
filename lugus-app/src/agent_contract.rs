@@ -115,12 +115,13 @@ pub fn scope_for_call(bound: &Scope, call: &ToolCall) -> Result<Scope> {
             false,
         ));
     }
-    Scope {
-        workspace_id: bound.workspace_id.clone(),
-        request_id: call.call_id.clone(),
-        run_id: Some(call.run_id.clone()),
+    // Validate the borrowed identity before any clone or tuple serialization.
+    if call.call_id.len() > Scope::MAX_ID_BYTES
+        || call.call_id.trim().is_empty()
+        || call.call_id.chars().any(char::is_control)
+    {
+        return Err(invalid("invalid tool call identity"));
     }
-    .validate()?;
     let encoded = serde_json::to_vec(&(
         &bound.workspace_id,
         &bound.request_id,
