@@ -5,6 +5,8 @@ mod bindings;
 mod conversations;
 mod evidence;
 mod freeze;
+mod passages;
+pub use passages::{PassageStore, PreparedText, TextPreparation, TextPreparationInput};
 mod sqlite;
 mod views;
 use crate::*;
@@ -13,6 +15,18 @@ use lugus_financial::resolution::catalog::CatalogSelection;
 pub use sqlite::SqliteApplicationStore;
 
 pub trait ApplicationStore: Send {
+    fn passage_store(&self) -> Result<&dyn PassageStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "passage storage is unavailable",
+        ))
+    }
+    fn passage_store_mut(&mut self) -> Result<&mut dyn PassageStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "passage storage is unavailable",
+        ))
+    }
     fn conversation_store(&self) -> Result<&dyn crate::conversations::ConversationStore> {
         Err(error(
             ErrorKind::Unsupported,

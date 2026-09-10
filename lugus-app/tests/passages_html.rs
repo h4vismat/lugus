@@ -432,3 +432,12 @@ fn hidden_template_fragments_cannot_bypass_the_depth_budget() {
         ErrorKind::ResourceLimit
     );
 }
+
+#[test]
+fn empty_source_response_still_requires_json_array_envelope() {
+    assert!(lugus_app::passages::resolve_sources(&[], &[], 1).is_err());
+    assert_eq!(
+        lugus_app::passages::resolve_sources(&[], &[], 2).unwrap(),
+        vec![]
+    );
+}

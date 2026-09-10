@@ -82,7 +82,7 @@ impl SqliteApplicationStore {
                 ));
             }
             tx.execute_batch("CREATE TABLE app_records(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repository TEXT NOT NULL,category TEXT NOT NULL,payload TEXT NOT NULL); CREATE TABLE dataset_rows(dataset_id TEXT NOT NULL REFERENCES app_records(id),ordinal INTEGER NOT NULL,payload TEXT NOT NULL,observation_id INTEGER,PRIMARY KEY(dataset_id,ordinal)); CREATE TABLE view_requests(workspace TEXT NOT NULL,request TEXT NOT NULL,input TEXT NOT NULL,view_id TEXT NOT NULL REFERENCES app_records(id),PRIMARY KEY(workspace,request)); PRAGMA application_id=1280657235; PRAGMA user_version=1;").map_err(storage)?;
-        } else if !(1..=3).contains(&version) || application != 1280657235 {
+        } else if !(1..=4).contains(&version) || application != 1280657235 {
             return Err(error(
                 ErrorKind::Storage,
                 "unsupported application database schema",
@@ -93,6 +93,9 @@ impl SqliteApplicationStore {
         }
         if version < 3 {
             super::conversations::migrate(&tx, &conversation_limits)?;
+        }
+        if version < 4 {
+            super::passages::migrate(&tx)?;
         }
         let stored_limits = super::conversations::configured_limits(&tx)?;
         if requested
@@ -183,6 +186,12 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     }
 }
 impl ApplicationStore for SqliteApplicationStore {
+    fn passage_store(&self) -> Result<&dyn PassageStore> {
+        Ok(self)
+    }
+    fn passage_store_mut(&mut self) -> Result<&mut dyn PassageStore> {
+        Ok(self)
+    }
     fn conversation_store(&self) -> Result<&dyn crate::conversations::ConversationStore> {
         Ok(self)
     }

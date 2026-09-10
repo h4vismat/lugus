@@ -137,6 +137,9 @@ pub fn resolve_sources(
     let index: HashMap<_, _> = nodes.iter().map(|node| (node.node_id, node)).collect();
     let mut result = Vec::new();
     let mut serialized_bytes = 2usize;
+    if serialized_bytes > max_bytes {
+        return Err(limit());
+    }
     for mapping in mappings {
         if let Some(source) = &mapping.source {
             let node = index

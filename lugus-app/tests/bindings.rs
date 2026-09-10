@@ -490,7 +490,7 @@ fn application_v1_migration_preserves_legacy_payloads_and_rejects_other_reposito
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(
         conn.query_row(
