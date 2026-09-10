@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, Write},
     sync::Arc,
+    time::Duration,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -190,12 +191,143 @@ fn invalid() -> AppError {
         false,
     )
 }
-fn emit(v: Value) -> CliResult<()> {
-    let mut out = std::io::stdout().lock();
-    serde_json::to_writer(&mut out, &v)?;
-    writeln!(out)?;
-    out.flush()?;
-    Ok(())
+// This is a CLI transport bound, independent of configurable durable-store budgets.
+const OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
+struct Frame {
+    value: Value,
+    stderr: bool,
+    flushed: Option<tokio::sync::oneshot::Sender<Result<()>>>,
+}
+impl Frame {
+    fn new(value: Value, stderr: bool) -> Result<Self> {
+        agent_contract::check_serialized_size(&value, OUTPUT_BYTES - 1)?;
+        Ok(Self {
+            value,
+            stderr,
+            flushed: None,
+        })
+    }
+}
+struct Output {
+    frames: mpsc::Sender<Frame>,
+    failed: watch::Receiver<bool>,
+}
+fn output_error() -> AppError {
+    AppError::new(
+        ErrorKind::Unavailable,
+        "conversation output could not be delivered",
+        false,
+    )
+}
+// Own duplicated OS handles, not the global stdio mutex: a stuck worker must not
+// obstruct stdio cleanup at process exit. Both supported desktop handle APIs retain
+// their respective platform's normal pipe/file semantics.
+fn output_files() -> std::io::Result<(std::fs::File, std::fs::File)> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        Ok((
+            std::io::stdout().as_fd().try_clone_to_owned()?.into(),
+            std::io::stderr().as_fd().try_clone_to_owned()?.into(),
+        ))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        Ok((
+            std::io::stdout().as_handle().try_clone_to_owned()?.into(),
+            std::io::stderr().as_handle().try_clone_to_owned()?.into(),
+        ))
+    }
+}
+impl Output {
+    fn start() -> CliResult<Self> {
+        let (stdout, stderr) = output_files()?;
+        let mut stdout = std::io::BufWriter::new(stdout);
+        let mut stderr = std::io::BufWriter::new(stderr);
+        let (frames, mut receiver) = mpsc::channel::<Frame>(2);
+        let (failed, failure) = watch::channel(false);
+        std::thread::Builder::new()
+            .name("conversation-output".into())
+            .spawn(move || {
+                while let Some(frame) = receiver.blocking_recv() {
+                    let out = if frame.stderr {
+                        &mut stderr
+                    } else {
+                        &mut stdout
+                    };
+                    let result = (|| {
+                        serde_json::to_writer(&mut *out, &frame.value)
+                            .map_err(|_| output_error())?;
+                        out.write_all(b"\n")
+                            .and_then(|_| out.flush())
+                            .map_err(|_| output_error())
+                    })();
+                    let broken = result.is_err();
+                    if let Some(flushed) = frame.flushed {
+                        let _ = flushed.send(result);
+                    }
+                    if broken {
+                        failed.send_replace(true);
+                        // Retain the worker so a broken stdout can still deliver the
+                        // final safe error on stderr after host cleanup.
+                    }
+                }
+            })?;
+        Ok(Self {
+            frames,
+            failed: failure,
+        })
+    }
+    // No output wait is allowed in the host/control loop. A congested diagnostic
+    // can be dropped without losing or delaying any cancellation input.
+    fn emit(&self, value: Value) -> Result<()> {
+        self.frames
+            .try_send(Frame::new(value, false)?)
+            .map_err(|_| output_error())
+    }
+    async fn failure(&self) {
+        let mut failed = self.failed.clone();
+        if !*failed.borrow_and_update() {
+            let _ = failed.changed().await;
+        }
+    }
+    async fn finish(&self, value: Value, stderr: bool) -> Result<()> {
+        let mut frame = Frame::new(value, stderr)?;
+        let (flushed, completion) = tokio::sync::oneshot::channel();
+        frame.flushed = Some(flushed);
+        tokio::time::timeout(OUTPUT_TIMEOUT, async {
+            self.frames.send(frame).await.map_err(|_| output_error())?;
+            completion.await.map_err(|_| output_error())?
+        })
+        .await
+        .map_err(|_| output_error())?
+    }
+}
+/// Own all conversation output, including the final result/error after host cleanup.
+/// Detached workers do no storage work and cannot keep runtime shutdown alive.
+pub async fn main(args: &[&str]) -> bool {
+    let Ok(output) = Output::start() else {
+        return false;
+    };
+    let (value, stderr, success) = match run(args, &output).await {
+        Ok(value) => (value, false, true),
+        Err(error) => {
+            let error = error
+                .downcast_ref::<AppError>()
+                .cloned()
+                .unwrap_or_else(|| {
+                    AppError::new(
+                        ErrorKind::InvalidInput,
+                        "invalid conversation command or input",
+                        false,
+                    )
+                });
+            (json!({"error":error}), true, false)
+        }
+    };
+    output.finish(value, stderr).await.is_ok() && success
 }
 // A dedicated OS thread is deliberately not joined: idle stdin cannot keep the Tokio
 // runtime alive after host cleanup. At most one bounded line and one pending control.
@@ -231,6 +363,7 @@ async fn execute(
     app: Application,
     request: SendMessageRequest,
     fixture: Fixture,
+    output: &Output,
 ) -> CliResult<Value> {
     let host = match ConversationHost::start(
         app.clone(),
@@ -247,7 +380,7 @@ async fn execute(
     };
     let result = async {
         let receipt = host.send(request).await?;
-        emit(json!({"event":"admitted","run":receipt}))?;
+        output.emit(json!({"event":"admitted","run":receipt}))?;
         let mut controls = controls();
         let mut open = true;
         let wait = host.wait(&receipt.conversation_id, &receipt.id);
@@ -255,6 +388,7 @@ async fn execute(
         let terminal = loop {
             tokio::select! {
                 result = &mut wait => break result?,
+                _ = output.failure() => return Err(output_error().into()),
                 control = controls.recv(), if open => match control {
                     None => open = false,
                     Some(control) => {
@@ -268,7 +402,7 @@ async fn execute(
                             Err(error) => Err(error),
                         };
                         if let Err(error) = result {
-                            emit(json!({"event":"control_error","error":error}))?;
+                            let _ = output.emit(json!({"event":"control_error","error":error}));
                         }
                     }
                 }
@@ -333,7 +467,7 @@ async fn offline(app: &Application, command: &str, args: &[&str]) -> CliResult<V
         _ => Err(invalid().into()),
     }
 }
-pub async fn run(args: &[&str]) -> CliResult<Value> {
+async fn run(args: &[&str], output: &Output) -> CliResult<Value> {
     let [command, config, tail @ ..] = args else {
         return Err(invalid().into());
     };
@@ -347,7 +481,7 @@ pub async fn run(args: &[&str]) -> CliResult<Value> {
         }
         let offline = matches!(fixture, Fixture::Continue { .. });
         let app = ApplicationConfig::load(config).await?.open(offline).await?;
-        return execute(app, request, fixture).await;
+        return execute(app, request, fixture, output).await;
     }
     let app = ApplicationConfig::load(config).await?.open(true).await?;
     if *command == "recover" && tail.is_empty() {

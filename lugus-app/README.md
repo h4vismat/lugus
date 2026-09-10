@@ -227,6 +227,20 @@ EOF merely closes controls and never auto-cancels. An idle open stdin never keep
 finished command alive. Independent CLI processes can inspect a live run, but v1 has
 no interprocess control service for canceling another owner.
 
+Conversation stdout and stderr use one dedicated output worker, a queue of at most
+two frames, and a 16 MiB bound per complete serialized frame including its newline.
+The worker owns duplicated OS handles; a stalled pipe never blocks the async host,
+control handling, deadlines, or cleanup. Under output backpressure, `control_error`
+notifications may be dropped; invalid controls still have no effect on the run.
+After awaited host cleanup releases execution ownership, final enqueue and flush
+share a one-second delivery deadline. A stalled or broken stream causes nonzero
+exit and may leave incomplete NDJSON or no final diagnostic; no worker is joined
+indefinitely. A broken stream detected during execution triggers awaited host
+shutdown, with a safe error on stderr when it remains writable. Durable run status
+is authoritative even if final output is lost: inspect `status`, or locate the
+original `request_id` in `runs` when the admission receipt was not delivered.
+Output failure never authorizes replay of a completed turn.
+
 For a real crash demonstration, submit a new request using `blocked.json` and the
 research fixture. Poll `tools` until eight records exist: the first seven completed,
 with the eighth bound-price call's `outcome` and `finished_at` still null. Kill only

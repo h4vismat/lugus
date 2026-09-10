@@ -162,9 +162,6 @@ async fn local(app: &Application, scope: &Scope, command: &str, args: &[&str]) -
     }
 }
 async fn run(args: &[&str]) -> CliResult<Value> {
-    if let ["conversation", tail @ ..] = args {
-        return support::conversations::run(tail).await;
-    }
     if let ["thesis-create", db, id, file] = args {
         let text = String::from_utf8(read_file(file).await?)?;
         let db = db.to_string();
@@ -204,26 +201,18 @@ async fn run(args: &[&str]) -> CliResult<Value> {
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<_> = args.iter().map(String::as_str).collect();
+    if let ["conversation", tail @ ..] = args.as_slice() {
+        if !support::conversations::main(tail).await {
+            std::process::exit(1);
+        }
+        return;
+    }
     match run(&args).await {
         Ok(value) => println!(
             "{}",
             serde_json::to_string(&value).expect("JSON value serializes")
         ),
-        Err(error) => {
-            if args.first() == Some(&"conversation") {
-                let error = error
-                    .downcast_ref::<AppError>()
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        AppError::new(
-                            ErrorKind::InvalidInput,
-                            "invalid conversation command or input",
-                            false,
-                        )
-                    });
-                eprintln!("{}", json!({"error":error}));
-                std::process::exit(1);
-            }
+        Err(_) => {
             eprintln!(
                 "research command failed; check arguments, stored thesis and configured resources"
             );

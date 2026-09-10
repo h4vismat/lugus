@@ -533,3 +533,177 @@ fn terminal_process_exits_with_idle_open_stdin_and_views_can_precede_messages() 
         assert_eq!(terminal["run"]["status"], status);
     }
 }
+
+#[test]
+fn unread_stdout_cannot_block_cancel_cleanup_or_process_exit() {
+    let f = Fixture::new();
+    for name in ["config.json", "offline.json", "blocked.json"] {
+        let mut config: Value = serde_json::from_slice(&std::fs::read(f.p(name)).unwrap()).unwrap();
+        config["limits"]["max_output_bytes"] = json!(1048576);
+        f.write(name, config);
+    }
+    let c = f.create("backpressure");
+    let cid = id(&c);
+    for index in 0..5 {
+        f.write("send.json", json!({"conversation_id":cid,"request_id":format!("history-{index}"),"text":"x".repeat(15000),"selected":[]}));
+        let result = f.config_call(
+            "send",
+            "config.json",
+            &[&f.p("send.json"), &f.p("conversation-research.json")],
+        );
+        assert_eq!(result["run"]["status"], "completed");
+    }
+    f.write(
+        "send.json",
+        json!({"conversation_id":cid,"request_id":"unread","text":"x".repeat(15000),"selected":[]}),
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lugus-research"))
+        .args([
+            "conversation",
+            "send",
+            &f.p("blocked.json"),
+            &f.p("send.json"),
+            &f.p("conversation-research.json"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let lines = BufReader::new(child.stdout.take().unwrap());
+    let mut owner = Running { child, lines };
+    // Deliberately never consume this owner's stdout, including its admitted receipt.
+    let start = Instant::now();
+    let run = loop {
+        let runs = f.call("runs", &[cid, "0", "100"]);
+        if let Some(run) = items(&runs)
+            .iter()
+            .find(|run| run["request_id"] == "unread")
+        {
+            break run.clone();
+        }
+        assert!(start.elapsed() < Duration::from_secs(4));
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        run.to_string().len() > 65536,
+        "admission must exceed pipe capacity"
+    );
+    pending(&f, cid, id(&run));
+    // Fill the bounded diagnostic queue too: invalid controls must not prevent a
+    // subsequent valid cancellation, even when their notifications cannot be delivered.
+    for _ in 0..4 {
+        writeln!(
+            owner.child.stdin.as_mut().unwrap(),
+            "{{\"command\":\"invalid\"}}"
+        )
+        .unwrap();
+    }
+    writeln!(
+        owner.child.stdin.as_mut().unwrap(),
+        "{}",
+        json!({"command":"cancel","conversation_id":cid,"run_id":id(&run)})
+    )
+    .unwrap();
+    let start = Instant::now();
+    loop {
+        let status = f.call("status", &[cid, id(&run)]);
+        if status["status"] == "interrupted" {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "unread stdout blocked durable cancellation: {}",
+            status["status"]
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let tools = f.call("tools", &[cid, id(&run), "0", "100"]);
+    assert!(
+        items(&tools).iter().all(|tool| !tool["outcome"].is_null()),
+        "cancel must finish owned tool cleanup"
+    );
+    assert_eq!(items(&tools).len(), 8);
+    let before = f.counts();
+    let lease = loop {
+        match lugus_app::conversations::LocalExecutionLease::acquire(f.p("application.sqlite")) {
+            Ok(lease) => break lease,
+            Err(error) => {
+                assert!(
+                    start.elapsed() < Duration::from_secs(4),
+                    "output held lease after cancellation: {error}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    };
+    assert!(
+        owner.child.try_wait().unwrap().is_none(),
+        "lease should release before output delivery times out"
+    );
+    drop(lease);
+    f.call("recover", &[]); // Lease is released without draining the owner's stdout.
+    assert_eq!(before, f.counts());
+    while owner.child.try_wait().unwrap().is_none() {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "unread stdout blocked process shutdown"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !owner.child.wait().unwrap().success(),
+        "output delivery timeout must be a nonzero exit"
+    );
+    assert_eq!(f.call("status", &[cid, id(&run)])["status"], "interrupted");
+}
+
+#[test]
+fn broken_stdout_closes_the_owning_host_without_waiting_for_turn_deadline() {
+    let f = Fixture::new();
+    let c = f.create("broken-output");
+    let cid = id(&c);
+    f.send(cid, "broken-output", json!([]));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lugus-research"))
+        .args([
+            "conversation",
+            "send",
+            &f.p("blocked.json"),
+            &f.p("send.json"),
+            &f.p("conversation-research.json"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let start = Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(4) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("broken stdout prevented host cleanup");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!child.wait().unwrap().success());
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&stderr).unwrap()["error"]["kind"],
+        "unavailable"
+    );
+    let runs = f.call("runs", &[cid, "0", "100"]);
+    assert_eq!(items(&runs).len(), 1);
+    assert!(matches!(
+        items(&runs)[0]["status"].as_str(),
+        Some("interrupted" | "failed")
+    ));
+    assert_eq!(items(&f.call("messages", &[cid, "0", "100"])).len(), 1);
+    let tools = f.call("tools", &[cid, id(&items(&runs)[0]), "0", "100"]);
+    assert!(items(&tools).iter().all(|tool| !tool["outcome"].is_null()));
+    let counts = f.counts();
+    f.call("recover", &[]);
+    assert_eq!(counts, f.counts());
+}
