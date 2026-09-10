@@ -239,6 +239,43 @@ async fn unknown_tools_receive_a_failure_without_calling_the_host() {
 }
 
 #[tokio::test]
+async fn namespaced_calls_cannot_invoke_a_registered_flat_tool() {
+    let executable = FakeExecutable::for_scenario("namespaced_tool");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let executor = RecallExecutor::default();
+
+    let (report, events) = run(&mut runtime, request("run-namespaced"), &executor).await;
+
+    assert_eq!(report.unwrap().outcome, RunOutcome::Completed);
+    assert!(executor.calls.lock().unwrap().is_empty());
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::ToolStarted { .. } | RuntimeEvent::ToolFinished { .. }
+    )));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn final_text_fallback_uses_only_the_last_assistant_item() {
+    let executable = FakeExecutable::for_scenario("multiple_messages");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+
+    let (report, _) = run(
+        &mut runtime,
+        request("run-multiple-messages"),
+        &RecallExecutor::default(),
+    )
+    .await;
+
+    assert_eq!(report.unwrap().final_text, "Final response.");
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn rejects_an_unsupported_codex_version() {
     let executable = FakeExecutable::for_scenario("bad_version");
     let error = CodexRuntime::connect(executable.config(None, None))

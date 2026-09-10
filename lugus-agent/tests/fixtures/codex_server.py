@@ -136,18 +136,24 @@ def serve_session():
         rpc_result(start, {"turn": turn(turn_id)})
 
         tool_name = "missing_tool" if scenario == "unknown_tool" else "lugus_recall"
+        namespace = "foreign" if scenario == "namespaced_tool" else None
         call_thread = "thread-other" if scenario == "wrong_thread" else thread_id
         send({
             "id": f"server-{thread_index}", "method": "item/tool/call",
             "params": {"arguments": {"thesis_id": "thesis-A"},
                        "callId": "call-1", "threadId": call_thread, "tool": tool_name,
-                       "turnId": turn_id, "namespace": None},
+                       "turnId": turn_id, "namespace": namespace},
         })
         if scenario == "wrong_thread":
             continue
         tool_response = read_message()
-        success = scenario != "unknown_tool"
-        expected_content = "Stored finding from thesis A" if success else "unknown tool: missing_tool"
+        success = scenario not in {"unknown_tool", "namespaced_tool"}
+        if scenario == "unknown_tool":
+            expected_content = "unknown tool: missing_tool"
+        elif scenario == "namespaced_tool":
+            expected_content = "unknown tool: foreign/lugus_recall"
+        else:
+            expected_content = "Stored finding from thesis A"
         expected_response = {
             "id": f"server-{thread_index}",
             "result": {"contentItems": [{"type": "inputText", "text": expected_content}], "success": success},
@@ -155,13 +161,22 @@ def serve_session():
         if tool_response != expected_response:
             sys.exit(1)
 
-        send({"method": "item/agentMessage/delta", "params": {
-            "delta": "Assessment uses ", "itemId": "message-1", "threadId": thread_id, "turnId": turn_id}})
-        send({"method": "item/agentMessage/delta", "params": {
-            "delta": "stored finding from thesis A.", "itemId": "message-1", "threadId": thread_id, "turnId": turn_id}})
-        item = {"id": "message-1", "text": "Assessment uses stored finding from thesis A.", "type": "agentMessage"}
-        send({"method": "item/completed", "params": {"item": item, "threadId": thread_id, "turnId": turn_id}})
-        send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "completed", [item])}})
+        if scenario == "multiple_messages":
+            send({"method": "item/agentMessage/delta", "params": {
+                "delta": "Draft response.", "itemId": "message-draft", "threadId": thread_id, "turnId": turn_id}})
+            send({"method": "item/agentMessage/delta", "params": {
+                "delta": "Final ", "itemId": "message-final", "threadId": thread_id, "turnId": turn_id}})
+            send({"method": "item/agentMessage/delta", "params": {
+                "delta": "response.", "itemId": "message-final", "threadId": thread_id, "turnId": turn_id}})
+            send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "completed", [])}})
+        else:
+            send({"method": "item/agentMessage/delta", "params": {
+                "delta": "Assessment uses ", "itemId": "message-1", "threadId": thread_id, "turnId": turn_id}})
+            send({"method": "item/agentMessage/delta", "params": {
+                "delta": "stored finding from thesis A.", "itemId": "message-1", "threadId": thread_id, "turnId": turn_id}})
+            item = {"id": "message-1", "text": "Assessment uses stored finding from thesis A.", "type": "agentMessage"}
+            send({"method": "item/completed", "params": {"item": item, "threadId": thread_id, "turnId": turn_id}})
+            send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "completed", [item])}})
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "app-server":

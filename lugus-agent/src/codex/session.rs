@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -223,7 +223,8 @@ impl CodexRuntime {
             .collect();
         let mut seen_calls = HashSet::new();
         let mut tool_calls = 0_usize;
-        let mut streamed_text = String::new();
+        let mut streamed_text = HashMap::<String, String>::new();
+        let mut active_message_id: Option<String> = None;
         let mut final_text = None;
 
         loop {
@@ -250,28 +251,31 @@ impl CodexRuntime {
                         )));
                     }
                     let name = string_field(&params, "tool", "dynamic tool call")?;
-                    let _ = events
-                        .send(RuntimeEvent::ToolStarted {
-                            call_id: call_id.into(),
-                            name: name.into(),
-                        })
-                        .await;
-
                     if tool_calls >= request.limits.max_tool_calls {
                         let result = bounded_failure(
                             "tool call limit exceeded",
                             request.limits.max_tool_result_bytes,
                         );
                         self.process.send(&tool_response(id, &result)).await?;
-                        let _ = events
-                            .send(RuntimeEvent::ToolFinished {
-                                call_id: call_id.into(),
-                                success: false,
-                            })
-                            .await;
                         return Err(Error::Tool("tool call limit exceeded".into()));
                     }
                     tool_calls += 1;
+
+                    if let Some(namespace) = params.get("namespace").and_then(Value::as_str) {
+                        let result = bounded_failure(
+                            &format!("unknown tool: {namespace}/{name}"),
+                            request.limits.max_tool_result_bytes,
+                        );
+                        self.process.send(&tool_response(id, &result)).await?;
+                        continue;
+                    }
+
+                    let _ = events
+                        .send(RuntimeEvent::ToolStarted {
+                            call_id: call_id.into(),
+                            name: name.into(),
+                        })
+                        .await;
 
                     let mut result = if registered.contains(name) {
                         tools
@@ -338,7 +342,11 @@ impl CodexRuntime {
                     return Ok(RunReport {
                         run_id: request.run_id.clone(),
                         outcome,
-                        final_text: final_text.unwrap_or(streamed_text),
+                        final_text: final_text.unwrap_or_else(|| {
+                            active_message_id
+                                .and_then(|item_id| streamed_text.remove(&item_id))
+                                .unwrap_or_default()
+                        }),
                     });
                 }
                 WireMessage::Notification {
@@ -347,8 +355,12 @@ impl CodexRuntime {
                 } if method == "item/agentMessage/delta" => {
                     validate_active(&params, thread_id, turn_id, "agent message delta")?;
                     let delta = string_field(&params, "delta", "agent message delta")?;
-                    string_field(&params, "itemId", "agent message delta")?;
-                    streamed_text.push_str(delta);
+                    let item_id = string_field(&params, "itemId", "agent message delta")?;
+                    streamed_text
+                        .entry(item_id.into())
+                        .or_default()
+                        .push_str(delta);
+                    active_message_id = Some(item_id.into());
                     let _ = events
                         .send(RuntimeEvent::TextDelta { text: delta.into() })
                         .await;
