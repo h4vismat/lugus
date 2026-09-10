@@ -148,7 +148,16 @@ impl ApplicationStore for SqliteApplicationStore {
                 "fetch provenance scope mismatch",
             ));
         }
-        if p.runs.iter().any(|r| r.id <= 0) || p.runs.len() > self.limits.max_pages_per_fetch {
+        // Runs are ingestion attempts, not provider pages. Resolve can start a
+        // fallback after its primary attempt consumed the entire page budget.
+        let (run_kind, max_runs) = match p.command.operation() {
+            Operation::Resolve => (Some(RunKind::Resolution), 2),
+            Operation::Lookup => (Some(RunKind::Resolution), 1),
+            Operation::Filings | Operation::Facts => (Some(RunKind::Financial), 1),
+            Operation::Prices => (Some(RunKind::Market), 1),
+            Operation::Document => (None, 0),
+        };
+        if p.runs.len() > max_runs || p.runs.iter().any(|r| r.id <= 0 || Some(r.kind) != run_kind) {
             return Err(error(ErrorKind::InvalidInput, "invalid fetch run receipts"));
         }
         let reference = FetchReference {

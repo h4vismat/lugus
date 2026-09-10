@@ -960,3 +960,222 @@ fn filings_preserve_exact_query_run_and_retrieval() {
         "2024-12-31T00:00:00+00:00"
     );
 }
+
+#[test]
+fn fallback_run_receipts_survive_a_single_page_budget_and_reopen() {
+    use lugus_financial::resolution::{
+        ResolutionPage, SearchQuery, SearchRequest, catalog::CatalogRepository,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let fin = dir.path().join("financial.sqlite");
+    let app = dir.path().join("app.sqlite");
+    let mut repo = SqliteRepository::open(&fin).unwrap();
+    let primary_query = SearchRequest {
+        query: SearchQuery::Identifier {
+            identifier: CompanyId {
+                namespace: "sec:ticker".into(),
+                value: "IBM".into(),
+            },
+            exchange: None,
+        },
+        page_size: 100,
+        cursor: None,
+    };
+    let primary = repo
+        .start_resolution_run(&provider(), &primary_query)
+        .unwrap();
+    repo.save_resolution_page(
+        primary,
+        &primary_query,
+        &ResolutionPage {
+            items: vec![],
+            next_cursor: None,
+            snapshot: "snapshot".into(),
+            coverage: "directory".into(),
+        },
+    )
+    .unwrap();
+    let fallback = repo
+        .start_resolution_run(
+            &provider(),
+            &SearchRequest {
+                query: SearchQuery::Name { text: "IBM".into() },
+                ..primary_query
+            },
+        )
+        .unwrap();
+    repo.fail_resolution_run(fallback, "provider page limit reached")
+        .unwrap();
+    let mut result = receipt(&repo, primary);
+    result.provenance.command = FetchCommand::Resolve {
+        instance_id: "local".into(),
+        input: "IBM".into(),
+    };
+    result.provenance.runs = vec![
+        RunReceipt {
+            kind: RunKind::Resolution,
+            id: primary,
+        },
+        RunReceipt {
+            kind: RunKind::Resolution,
+            id: fallback,
+        },
+    ];
+    result.error = Some(AppError::new(
+        ErrorKind::ResourceLimit,
+        "provider page limit reached",
+        false,
+    ));
+    let mut s = SqliteApplicationStore::open(
+        &app,
+        Box::new(SqliteRepository::open(&fin).unwrap()),
+        Limits {
+            max_pages_per_fetch: 1,
+            ..Limits::default()
+        },
+        Box::new(TestClock),
+        Box::new(TestIds(AtomicU64::new(1))),
+    )
+    .unwrap();
+    let reference = s.record_fetch(&result).unwrap();
+    drop(s);
+    let s = store(&app, &fin);
+    let reopened = s.read_fetch(&app_scope(), &reference.id).unwrap();
+    assert_eq!(reopened.runs, result.provenance.runs);
+    assert_eq!(reopened.error.unwrap().kind, ErrorKind::ResourceLimit);
+}
+
+#[test]
+fn receipt_run_bounds_follow_operations_and_keep_positive_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let fin = dir.path().join("financial.sqlite");
+    let repo = SqliteRepository::open(&fin).unwrap();
+    let mut s = store(&dir.path().join("app.sqlite"), &fin);
+    let mut r = receipt(&repo, 1);
+    r.provenance.runs.push(RunReceipt {
+        kind: RunKind::Market,
+        id: 2,
+    });
+    assert_eq!(
+        s.record_fetch(&r).unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
+    r.provenance.command = FetchCommand::Resolve {
+        instance_id: "local".into(),
+        input: "IBM".into(),
+    };
+    r.provenance.runs = (1..=3)
+        .map(|id| RunReceipt {
+            kind: RunKind::Resolution,
+            id,
+        })
+        .collect();
+    assert_eq!(
+        s.record_fetch(&r).unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
+    r.provenance.runs.truncate(2);
+    r.provenance.command = FetchCommand::Lookup {
+        instance_id: "local".into(),
+        request: LookupRequest {
+            identifier: scope().company,
+        },
+    };
+    assert_eq!(
+        s.record_fetch(&r).unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
+    r.provenance.runs.truncate(1);
+    r.provenance.runs[0].id = 0;
+    assert_eq!(
+        s.record_fetch(&r).unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
+    r.provenance.runs[0].id = 1;
+    r.provenance.runs[0].kind = RunKind::Market;
+    assert_eq!(
+        s.record_fetch(&r).unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
+    r.provenance.command = FetchCommand::Document {
+        instance_id: "local".into(),
+        source_url: "https://fixture.test/document".into(),
+    };
+    assert_eq!(
+        s.record_fetch(&r).unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
+    let mut tiny = SqliteApplicationStore::open(
+        dir.path().join("tiny.sqlite"),
+        Box::new(SqliteRepository::open(&fin).unwrap()),
+        Limits {
+            max_input_bytes: 1,
+            ..Limits::default()
+        },
+        Box::new(TestClock),
+        Box::new(TestIds(AtomicU64::new(1))),
+    )
+    .unwrap();
+    assert_eq!(
+        tiny.record_fetch(&receipt(&repo, 1)).unwrap_err().kind,
+        ErrorKind::ResourceLimit
+    );
+}
+
+#[test]
+fn zero_row_header_obeys_total_creation_bytes_without_persisting_a_dataset() {
+    let dir = tempfile::tempdir().unwrap();
+    let fin = dir.path().join("financial.sqlite");
+    let app = dir.path().join("app.sqlite");
+    let mut repo = SqliteRepository::open(&fin).unwrap();
+    let doc = Document {
+        source_url: format!("https://fixture.test/{}", "x".repeat(900)),
+        media_type: "text/html".into(),
+        content_base64: "aGVsbG8=".into(),
+        retrieved_at: "2024-12-31T00:00:00Z".parse().unwrap(),
+    };
+    let checksum = repo.save_document(&provider(), &doc, 1000).unwrap();
+    let mut r = receipt(&repo, 1);
+    r.provenance.runs.clear();
+    r.provenance.command = FetchCommand::Document {
+        instance_id: "local".into(),
+        source_url: doc.source_url,
+    };
+    r.provenance.document = Some(repo.document_observations(&checksum).unwrap().remove(0));
+    let mut s = SqliteApplicationStore::open(
+        &app,
+        Box::new(SqliteRepository::open(&fin).unwrap()),
+        Limits {
+            max_bytes_per_fetch: 1000,
+            max_document_bytes: 1000,
+            ..Limits::default()
+        },
+        Box::new(TestClock),
+        Box::new(TestIds(AtomicU64::new(1))),
+    )
+    .unwrap();
+    let f = s.record_fetch(&r).unwrap();
+    assert_eq!(
+        s.create_dataset(&app_scope(), &f.id, DatasetProjection::Document)
+            .unwrap_err()
+            .kind,
+        ErrorKind::ResourceLimit
+    );
+    let sql = rusqlite::Connection::open(&app).unwrap();
+    assert_eq!(
+        sql.query_row(
+            "SELECT count(*) FROM app_records WHERE category='dataset'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sql.query_row("SELECT count(*) FROM dataset_rows", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(s.read_fetch(&app_scope(), &f.id).is_ok());
+}

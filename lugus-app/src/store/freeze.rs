@@ -205,6 +205,9 @@ impl SqliteApplicationStore {
         }
         let payload = json(&header, self.limits.max_output_bytes)?;
         let mut bytes = payload.len();
+        if bytes > self.limits.max_bytes_per_fetch {
+            return Err(limit());
+        }
         let mut encoded = Vec::with_capacity(rows.len());
         for row in rows {
             let observation = match &row {
