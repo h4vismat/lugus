@@ -24,6 +24,7 @@ use crate::{
 
 const EVENT_DELIVERY_TIMEOUT: Duration = Duration::from_millis(100);
 const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
+const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
 struct TurnScope<'a> {
@@ -83,7 +84,7 @@ impl CodexRuntime {
 
         let process = CodexProcess::spawn(
             &config.executable,
-            &startup_args(),
+            &startup_args(config.model.as_deref(), config.model_provider.as_deref()),
             &config.workspace,
             TransportLimits::default(),
         )?;
@@ -124,13 +125,18 @@ impl CodexRuntime {
     }
 
     async fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
+        let deadline = tokio::time::Instant::now() + RPC_TIMEOUT;
         let id = self.take_request_id()?;
-        self.process
-            .send(&json!({"id": id, "method": method, "params": params}))
-            .await?;
+        let request = json!({"id": id, "method": method, "params": params});
+        tokio::time::timeout_at(deadline, self.process.send(&request))
+            .await
+            .map_err(|_| Error::Timeout)??;
 
         loop {
-            match classify_message(self.process.receive().await?)? {
+            let message = tokio::time::timeout_at(deadline, self.process.receive())
+                .await
+                .map_err(|_| Error::Timeout)??;
+            match classify_message(message)? {
                 WireMessage::Response {
                     id: response_id,
                     outcome,
@@ -146,7 +152,10 @@ impl CodexRuntime {
                     };
                 }
                 WireMessage::Request { id, .. } => {
-                    self.process.send(&method_not_found_response(id)).await?;
+                    let response = method_not_found_response(id);
+                    tokio::time::timeout_at(deadline, self.process.send(&response))
+                        .await
+                        .map_err(|_| Error::Timeout)??;
                 }
                 WireMessage::Notification { .. } => {}
             }
@@ -170,29 +179,39 @@ impl CodexRuntime {
         cancel: &mut watch::Receiver<bool>,
         deadline: tokio::time::Instant,
     ) -> Result<RunReport> {
+        if *cancel.borrow() {
+            return self.cancel_before_turn(request).await;
+        }
         if self.account_status == AccountStatus::LoginRequired {
             return Err(Error::AuthenticationRequired);
         }
 
-        let mcp_server_ids = self.current_mcp_server_ids().await?;
+        let mcp_server_ids = tokio::select! {
+            biased;
+            () = wait_for_cancellation(cancel) => return self.cancel_before_turn(request).await,
+            ids = self.current_mcp_server_ids() => ids?,
+            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+        };
 
-        let thread = self
-            .rpc(
-                "thread/start",
-                self.thread_start_params(request, &mcp_server_ids),
-            )
-            .await?;
+        let thread_start_params = self.thread_start_params(request, &mcp_server_ids);
+        let thread = tokio::select! {
+            biased;
+            () = wait_for_cancellation(cancel) => return self.cancel_before_turn(request).await,
+            thread = self.rpc("thread/start", thread_start_params) => thread?,
+            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+        };
         let thread_id = response_id_at(&thread, &["thread", "id"], "thread/start")?;
 
-        let turn = self
-            .rpc(
-                "turn/start",
-                json!({
-                    "threadId": thread_id,
-                    "input": [{"type": "text", "text": request.prompt}],
-                }),
-            )
-            .await?;
+        let turn_start_params = json!({
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": request.prompt}],
+        });
+        let turn = tokio::select! {
+            biased;
+            () = wait_for_cancellation(cancel) => return self.cancel_before_turn(request).await,
+            turn = self.rpc("turn/start", turn_start_params) => turn?,
+            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+        };
         let turn_id = response_id_at(&turn, &["turn", "id"], "turn/start")?;
         if emit_event(
             events,
@@ -231,6 +250,11 @@ impl CodexRuntime {
             )
             .await?;
         mcp_server_ids(&config)
+    }
+
+    async fn cancel_before_turn(&mut self, request: &RunRequest) -> Result<RunReport> {
+        let _ = self.process.abort().await;
+        Ok(cancelled_report(request))
     }
 
     fn thread_start_params(&self, request: &RunRequest, mcp_server_ids: &[String]) -> Value {
@@ -544,7 +568,7 @@ impl CodexRuntime {
             }
         };
         let _ = tokio::time::timeout(INTERRUPT_GRACE, completed).await;
-        let _ = self.process.close().await;
+        let _ = self.process.abort().await;
 
         Ok(cancelled_report(request))
     }
@@ -561,7 +585,7 @@ impl AgentRuntime for CodexRuntime {
     ) -> Result<RunReport> {
         validate_request(&request)?;
         if *cancel.borrow() {
-            let _ = self.process.close().await;
+            let _ = self.process.abort().await;
             return Ok(cancelled_report(&request));
         }
         let deadline = tokio::time::Instant::now() + request.limits.timeout;

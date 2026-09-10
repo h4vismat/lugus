@@ -82,6 +82,10 @@ def serve_session():
         "-c", 'approval_policy="never"',
         "-c", 'sandbox_mode="read-only"',
     ]
+    if scenario == "normal":
+        expected_startup_args += ["-c", 'model="gpt-test"', "-c", 'model_provider="test-provider"']
+    elif scenario == "provider_auth":
+        expected_startup_args += ["-c", 'model_provider="compatible"']
     if sys.argv[2:] != expected_startup_args:
         sys.exit(1)
     initialize = read_message()
@@ -96,6 +100,10 @@ def serve_session():
     if initialize != expected_initialize:
         send({"id": initialize.get("id", 1), "error": {"code": -32600, "message": "initialize required"}})
         return
+    if scenario == "startup_notifications":
+        while True:
+            send({"method": "server/unrelated", "params": {}})
+            time.sleep(0.01)
     rpc_result(initialize, {
         "codexHome": os.getcwd(), "platformFamily": "unix",
         "platformOs": sys.platform, "userAgent": "codex-cli/0.153.4",
@@ -113,7 +121,10 @@ def serve_session():
             next_id += 1
             if message.get("params") != {}:
                 sys.exit(1)
+            selected_provider = "compatible" if 'model_provider="compatible"' in sys.argv[2:] else None
             if scenario == "login_required":
+                rpc_result(message, {"account": None, "requiresOpenaiAuth": True})
+            elif scenario == "provider_auth" and selected_provider != "compatible":
                 rpc_result(message, {"account": None, "requiresOpenaiAuth": True})
             elif scenario == "provider_auth":
                 rpc_result(message, {"account": None, "requiresOpenaiAuth": False})
@@ -127,6 +138,9 @@ def serve_session():
             config_reads += 1
             if message.get("params") != {"cwd": os.getcwd(), "includeLayers": False}:
                 sys.exit(1)
+            if scenario == "startup_stall":
+                while True:
+                    time.sleep(1)
             config = {"mcp_servers": {"inherited": {"command": "unused"}}}
             if scenario == "malformed_config":
                 config = {"mcp_servers": []}

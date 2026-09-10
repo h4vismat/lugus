@@ -449,6 +449,44 @@ async fn cancellation_remains_responsive_while_a_tool_executor_is_pending() {
 }
 
 #[tokio::test]
+async fn cancellation_during_startup_reaps_before_any_turn_is_started() {
+    let executable = FakeExecutable::for_scenario("startup_stall");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let (events, _received) = mpsc::channel(1);
+    let (cancel_tx, cancel) = watch::channel(false);
+    let executor = RecallExecutor::default();
+    let report = {
+        let run = runtime.run(request("run-cancel-startup"), &executor, events, cancel);
+        tokio::pin!(run);
+
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(25)) => cancel_tx.send(true).unwrap(),
+            result = &mut run => panic!("startup ended before cancellation: {result:?}"),
+        }
+        timeout(Duration::from_millis(500), &mut run)
+            .await
+            .expect("startup cancellation must not wait for a transport deadline")
+            .unwrap()
+    };
+
+    assert_eq!(report.outcome, RunOutcome::Cancelled);
+    assert_runtime_was_reaped(&mut runtime).await;
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_rpcs_timeout_across_unrelated_notifications() {
+    let executable = FakeExecutable::for_scenario("startup_notifications");
+    let error = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Timeout));
+}
+
+#[tokio::test]
 async fn refuses_to_start_when_inherited_mcp_configuration_cannot_be_parsed() {
     let executable = FakeExecutable::for_scenario("malformed_config");
     let mut runtime = CodexRuntime::connect(executable.config(None, None))

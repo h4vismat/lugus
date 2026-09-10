@@ -5,7 +5,7 @@ use crate::{Error, Result};
 /// Returns process-local CLI overrides for controls whose values do not
 /// depend on the effective MCP configuration. They affect this app-server
 /// process only and never write the user's configuration.
-pub(super) fn startup_args() -> Vec<String> {
+pub(super) fn startup_args(model: Option<&str>, model_provider: Option<&str>) -> Vec<String> {
     let settings = [
         "features.shell_tool=false",
         "features.hooks=false",
@@ -37,7 +37,21 @@ pub(super) fn startup_args() -> Vec<String> {
         args.push("-c".into());
         args.push(setting.into());
     }
+    if let Some(model) = model {
+        args.push("-c".into());
+        args.push(format!("model={}", toml_string(model)));
+    }
+    if let Some(model_provider) = model_provider {
+        args.push("-c".into());
+        args.push(format!("model_provider={}", toml_string(model_provider)));
+    }
     args
+}
+
+fn toml_string(value: &str) -> String {
+    // JSON string escaping is a valid TOML basic-string subset and avoids
+    // interpreting provider values as configuration syntax.
+    serde_json::to_string(value).expect("serializing a string cannot fail")
 }
 
 /// Builds the verified 0.153.4 session override used for unattended turns.

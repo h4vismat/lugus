@@ -153,20 +153,41 @@ impl CodexProcess {
     }
 
     pub(super) async fn close(&mut self) -> Result<()> {
+        self.shutdown(true).await
+    }
+
+    /// Terminates an owned process without waiting for protocol-level or EOF
+    /// cooperation. Cancellation uses this before a turn id exists.
+    pub(super) async fn abort(&mut self) -> Result<()> {
+        self.shutdown(false).await
+    }
+
+    async fn shutdown(&mut self, graceful: bool) -> Result<()> {
         self.stdin.take();
 
         let mut result = Ok(());
         if let Some(child) = self.child.as_mut() {
-            match tokio::time::timeout(self.limits.shutdown_grace, child.wait()).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => result = Err(process_error(error)),
-                Err(_) => {
-                    if let Err(error) = child.start_kill() {
-                        result = Err(process_error(error));
+            if graceful {
+                match tokio::time::timeout(self.limits.shutdown_grace, child.wait()).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => result = Err(process_error(error)),
+                    Err(_) => {
+                        if let Err(error) = child.start_kill() {
+                            result = Err(process_error(error));
+                        }
+                        if let Err(error) = child.wait().await {
+                            result = Err(process_error(error));
+                        }
                     }
-                    if let Err(error) = child.wait().await {
-                        result = Err(process_error(error));
-                    }
+                }
+            } else {
+                if let Err(error) = child.start_kill() {
+                    result = Err(process_error(error));
+                }
+                if let Err(error) = child.wait().await
+                    && result.is_ok()
+                {
+                    result = Err(process_error(error));
                 }
             }
         }
