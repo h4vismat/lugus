@@ -39,8 +39,7 @@ pub(crate) enum NotificationMethod {
     Unknown(String),
 }
 
-/// Classifies a protocol frame without accepting JSON-RPC's `jsonrpc` header;
-/// Codex app-server frames deliberately omit it.
+/// Classifies Codex's header-free app-server protocol frames.
 pub(crate) fn classify_message(value: Value) -> Result<WireMessage> {
     let object = value.as_object().ok_or_else(malformed_envelope)?;
     let id = object.get("id");
@@ -51,13 +50,10 @@ pub(crate) fn classify_message(value: Value) -> Result<WireMessage> {
     match (id, method, result, error) {
         (Some(id), Some(Value::String(method)), None, None) => {
             validate_request_id(id)?;
-            let params = object
-                .get("params")
-                .cloned()
-                .ok_or_else(malformed_envelope)?;
             let request_method = match method.as_str() {
                 "item/tool/call" => {
-                    validate_dynamic_tool_call(&params)?;
+                    let params = object.get("params").ok_or_else(malformed_envelope)?;
+                    validate_dynamic_tool_call(params)?;
                     RequestMethod::DynamicToolCall
                 }
                 _ => RequestMethod::Unknown(method.clone()),
@@ -65,16 +61,24 @@ pub(crate) fn classify_message(value: Value) -> Result<WireMessage> {
             Ok(WireMessage::Request {
                 id: id.clone(),
                 method: request_method,
-                params,
+                params: object.get("params").cloned().unwrap_or(Value::Null),
             })
         }
-        (None, Some(Value::String(method)), None, None) => Ok(WireMessage::Notification {
-            method: match method.as_str() {
-                "turn/completed" => NotificationMethod::TurnCompleted,
-                _ => NotificationMethod::Unknown(method.clone()),
-            },
-            params: object.get("params").cloned(),
-        }),
+        (None, Some(Value::String(method)), None, None) => {
+            if method == "turn/completed" {
+                let params = object.get("params").ok_or_else(malformed_turn_completion)?;
+                validate_turn_completed(params)?;
+                Ok(WireMessage::Notification {
+                    method: NotificationMethod::TurnCompleted,
+                    params: Some(params.clone()),
+                })
+            } else {
+                Ok(WireMessage::Notification {
+                    method: NotificationMethod::Unknown(method.clone()),
+                    params: object.get("params").cloned(),
+                })
+            }
+        }
         (Some(id), None, Some(result), None) => {
             validate_request_id(id)?;
             Ok(WireMessage::Response {
@@ -139,12 +143,39 @@ fn validate_dynamic_tool_call(params: &Value) -> Result<()> {
     Ok(())
 }
 
+fn validate_turn_completed(params: &Value) -> Result<()> {
+    let params = params.as_object().ok_or_else(malformed_turn_completion)?;
+    if !matches!(params.get("threadId"), Some(Value::String(_))) {
+        return Err(malformed_turn_completion());
+    }
+
+    let turn = params
+        .get("turn")
+        .and_then(Value::as_object)
+        .ok_or_else(malformed_turn_completion)?;
+    if !matches!(turn.get("id"), Some(Value::String(_)))
+        || !matches!(turn.get("items"), Some(Value::Array(_)))
+        || !matches!(
+            turn.get("status"),
+            Some(Value::String(status)) if matches!(status.as_str(), "completed" | "interrupted" | "failed" | "inProgress")
+        )
+    {
+        return Err(malformed_turn_completion());
+    }
+
+    Ok(())
+}
+
 fn malformed_envelope() -> Error {
     Error::Protocol("malformed protocol envelope".into())
 }
 
 fn malformed_tool_call() -> Error {
     Error::Protocol("malformed dynamic tool call".into())
+}
+
+fn malformed_turn_completion() -> Error {
+    Error::Protocol("malformed turn completion notification".into())
 }
 
 #[cfg(test)]
@@ -263,5 +294,53 @@ mod tests {
             method_not_found_response(json!(9)),
             json!({"id": 9, "error": {"code": -32601, "message": "Method not found"}})
         );
+    }
+
+    #[test]
+    fn parameterless_unknown_requests_reach_method_not_found_handling() {
+        let message = classify_message(json!({"id": 9, "method": "future/request"})).unwrap();
+
+        assert!(matches!(message, WireMessage::Request {
+            id, method: RequestMethod::Unknown(method), params
+        } if id == json!(9) && method == "future/request" && params.is_null()));
+        assert_eq!(
+            method_not_found_response(json!(9)),
+            json!({"id": 9, "error": {"code": -32601, "message": "Method not found"}})
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_turn_completed_notifications() {
+        for params in [
+            json!(null),
+            json!({}),
+            json!({"threadId": "thread-1"}),
+            json!({
+                "threadId": "thread-1", "turn": "not-an-object"
+            }),
+        ] {
+            let error = classify_message(json!({"method": "turn/completed", "params": params}))
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "protocol error: malformed turn completion notification"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_schema_required_turn_completed_fields() {
+        let message = classify_message(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}
+            }
+        }))
+        .unwrap();
+
+        assert!(matches!(message, WireMessage::Notification {
+            method: NotificationMethod::TurnCompleted, params: Some(params)
+        } if params["threadId"] == "thread-1"));
     }
 }
