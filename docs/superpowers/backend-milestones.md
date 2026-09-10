@@ -104,11 +104,13 @@ Version 1 limits: conversation bounds are persisted (changes need an explicit co
 
 ### 4. Filing text and passage references
 
-Extract readable content from HTML/PDF filings while retaining original document checksum, extraction version, text-representation identity, and mappings to source locations.
+**Status: implementation complete; controller verification and review pending.**
 
-Bind a user's selection to the exact document/text version and pass a bounded reference into an agent turn. The plain-text spike does not validate HTML/PDF offsets or extraction fidelity. Conversation passage context and durable review evidence capture remain distinct concerns.
+Extract readable content from HTML filings, including Inline XBRL, while retaining original document checksum, extraction version, text-representation identity, and mappings to source locations. PDF extraction and OCR are deferred, along with XML/SGML extraction and browser/desktop highlighting.
 
-**Exit:** ask about a selected passage in a real-format fixture, follow its source location, and verify that a newer document revision does not reinterpret the old selection.
+Bind a user's selection to the exact document/text version and pass a bounded reference into an agent turn. Source coordinates address deterministic parsed source-node text rather than raw HTML bytes or rendered layout. Conversation passage context and durable review evidence capture remain distinct concerns.
+
+**Exit pending controller verification:** ask about a selected passage in a real HTML/Inline XBRL fixture, follow its source location, and verify that a newer same-URL document revision does not reinterpret the old selection after restart and provider removal.
 
 ### 5. Active-workspace background refresh
 

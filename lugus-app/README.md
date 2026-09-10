@@ -11,6 +11,7 @@ The cloneable host exposes:
 - `scope(workspace, request, optional_run)`, `offering()`, `providers()` and `subscribe()`.
 - `submit_manual(scope, command)` or `submit(scope, captured_offering, command)` returning `JobReceipt`; `status`, async `wait`, and `cancel` take an owned workspace scope and job ID.
 - Async `create_binding`, `read_binding`, `list_bindings`, `revoke_binding`, and `binding_history` with scoped saved evidence. `fetch_bound_prices_manual(scope, &request)` or `fetch_bound_prices(scope, captured_offering, &request)` returns an ordinary supervised job.
+- Async `prepare_text`, `text_header`, `read_text`, `create_passage`, `read_passage`, and `resolve_passage` operate on scoped saved document evidence without an active provider.
 - Async `activate(instance)`, `deactivate(instance)` and `shutdown()`. Activation explicitly restarts an existing instance, increments generation, and invalidates old offerings. It never implicitly retries through another provider.
 - Async `read_fetch`, `create_dataset`, `dataset_header`, `read_dataset`, `read_document`, `select_candidate`, `open_view`, `read_view`, and `report_presentation` with a scope on every operation.
 
@@ -55,6 +56,128 @@ target/debug/lugus-research read-view /tmp/lugus-research-demo/offline.json work
 ```
 
 All local CLI read/mutation commands open offline automatically; `fetch` and `bound-prices` start configured providers. They also work with the original config if its manifest/plugin files are removed. Additional commands follow `COMMAND CONFIG WORKSPACE REQUEST ...`: `dataset FETCH_ID PROJECTION_JSON`, `header DATASET_ID`, `document DATASET_ID OFFSET LENGTH`, `view DATASET_ID price_chart|data_table|document`, and `select DATASET_ID OBSERVATION_ID`. `cargo run -p lugus-app --example research --offline -- ...` provides the same CLI. Operational fetch failures are structured JSON with stable error kinds; malformed CLI calls exit nonzero with a safe diagnostic. Each invocation explicitly shuts down its host before returning.
+
+## HTML filing text and passage CLI
+
+The public passage commands use the same `COMMAND CONFIG WORKSPACE REQUEST ...`
+prefix and always operate locally on saved evidence:
+
+| Command arguments | JSON result and returned identity |
+| --- | --- |
+| `prepare-text DATASET_ID` | `TextRepresentation`; retain `id`, `document.checksum`, `text_checksum`, `text_bytes`, extractor/decoder identity, counts and limitations |
+| `text-header REPRESENTATION_ID` | The same immutable `TextRepresentation` metadata |
+| `read-text REPRESENTATION_ID START END` | `TextPage` with `representation_id`, `start`, `end`, `total_bytes`, and `text` |
+| `create-passage REQUEST_JSON` | `Passage`; retain its `id`, exact `quote`, range, checksums, representation and mappings |
+| `read-passage PASSAGE_ID` | The stored immutable `Passage` |
+| `resolve-passage PASSAGE_ID` | `PassageSource` with the passage and bounded source-node excerpts |
+
+`START` and `END` are absolute, half-open UTF-8 byte coordinates `[START, END)`
+in the selected immutable canonical text. They are neither character indices nor
+offset/length pairs. The older `document DATASET_ID OFFSET LENGTH` command retains
+its original-byte offset/length convention. `create-passage` accepts a strict JSON
+object with only `representation_id`, `start`, `end`, and `expected_text`; it rejects
+an invalid UTF-8 boundary, an empty or synthetic-only selection, a stale quote, an
+oversized selection, and a representation outside the authenticated workspace.
+Request deduplication is scoped by workspace/request: identical input returns the
+original passage, while changed input conflicts.
+
+The generated synthetic files include explicit `passage-html.json` and
+`passage-revised.json` provider modes. Existing configurations retain their original
+`text/plain` document response. The following commands start with a real conversation
+and use its returned workspace for every document and passage operation. Replace
+uppercase placeholders only with IDs or values returned by the preceding command:
+
+```sh
+python3 lugus-app/examples/synthetic/setup.py /tmp/lugus-passage-demo
+cargo build -p lugus-app --bin lugus-research --offline --locked
+target/debug/lugus-research conversation create /tmp/lugus-passage-demo/offline.json /tmp/lugus-passage-demo/conversation-create.json
+# retain the returned conversation id as C and workspace_id as W
+target/debug/lugus-research fetch /tmp/lugus-passage-demo/passage-html.json W fetch-original /tmp/lugus-passage-demo/passage-document.json
+# retain fetch_id as F1
+target/debug/lugus-research dataset /tmp/lugus-passage-demo/offline.json W dataset-original F1 /tmp/lugus-passage-demo/document-projection.json
+# retain the returned dataset id as D1
+target/debug/lugus-research prepare-text /tmp/lugus-passage-demo/offline.json W prepare-original D1
+# retain the returned representation id as T1 and document.checksum as S1
+target/debug/lugus-research text-header /tmp/lugus-passage-demo/offline.json W header-original T1
+target/debug/lugus-research read-text /tmp/lugus-passage-demo/offline.json W read-original T1 0 TEXT_BYTES
+```
+
+Find the literal `Revenue & cash grew.` in that returned canonical `text`, calculate
+its UTF-8 byte range, and write `/tmp/lugus-passage-demo/create-passage.json`:
+
+```json
+{"representation_id":"T1","start":13,"end":33,"expected_text":"Revenue & cash grew."}
+```
+
+The synthetic fixture fixes this selection at `[13,33)`, crossing three parsed text
+nodes. Create and inspect it with:
+
+```sh
+target/debug/lugus-research create-passage /tmp/lugus-passage-demo/offline.json W passage-original /tmp/lugus-passage-demo/create-passage.json
+# retain the returned passage id as P1
+target/debug/lugus-research read-passage /tmp/lugus-passage-demo/offline.json W read-passage P1
+target/debug/lugus-research resolve-passage /tmp/lugus-passage-demo/offline.json W resolve-passage P1
+```
+
+To ask through the deterministic actual `AgentRuntime`, write
+`/tmp/lugus-passage-demo/passage-send.json`:
+
+```json
+{"conversation_id":"C","request_id":"ask-original","text":"What does this exact filing passage say?","selected":[{"kind":"passage","id":"P1"}]}
+```
+
+Write `/tmp/lugus-passage-demo/passage-runtime.json` with the strict fixture:
+
+```json
+{"mode":"passage","expected_passage_id":"P1","expected_quote":"Revenue & cash grew.","expected_document_checksum":"S1"}
+```
+
+```sh
+target/debug/lugus-research conversation send /tmp/lugus-passage-demo/offline.json /tmp/lugus-passage-demo/passage-send.json /tmp/lugus-passage-demo/passage-runtime.json
+# retain the terminal run.id as R1
+target/debug/lugus-research conversation context /tmp/lugus-passage-demo/offline.json C R1
+target/debug/lugus-research conversation tools /tmp/lugus-passage-demo/offline.json C R1 0 10
+```
+
+`send` emits admitted and terminal NDJSON records. The completed assistant message
+reports the passage ID, frozen quote, original document checksum and source count.
+The tools page contains one actual `lugus_resolve_passage` call. This fixture
+demonstrates the application runtime and tool boundary without a seeded passage,
+stored thesis, live model answer, rendered UI, or durable investment-review claim.
+
+Fetch `passage-document.json` again through `passage-revised.json`, create a second
+document dataset, and prepare it. The source URL is unchanged, while the original-byte
+checksum and representation ID change. Reusing the old range and expected quote with
+the new representation fails; read the new canonical text and explicitly create a new
+passage for `Revenue & cash fell sharply.`. After closing any document tab with
+`conversation layout`, remove `manifest.json`. `read-passage`, `resolve-passage`,
+`conversation context`, and the closed `conversation view` remain available through
+`offline.json`, preserving the first passage and frozen turn byte for byte.
+
+Version 1 extracts only `text/html`, including visible Inline XBRL facts. PDF, OCR,
+XML/SGML, XHTML, browser layout and desktop highlighting are deferred. UTF-8 is the
+strict default; a UTF-8 BOM, transport charset and actual HTML declaration must agree.
+Explicitly declared Windows-1252/cp1252 is the only alternative. Unsupported,
+conflicting, UTF-16 or invalid encodings fail rather than replacing characters.
+
+Source paths are zero-based child ordinals in the deterministic parsed tree. Source
+ranges are UTF-8 byte ranges in entity-decoded source-node text; they are not raw HTML
+byte offsets, browser UTF-16 coordinates or screen positions. Normalized whitespace
+may have several contributors and structural separators are synthetic, so mapping is
+not generally one-to-one. The adapter excludes `head`, `script`, `style`, `template`,
+`ix:hidden`, hidden attributes, and supported inline `display:none` or
+`visibility:hidden`. It does not execute scripts, fetch styles, evaluate the complete
+CSS cascade, pseudo-elements or layout.
+
+Preparation defaults to two independently bounded concurrent jobs. Canonical and
+source text use bounded UTF-8 chunks; reads deserialize only overlapping payload rows.
+Before a mapping read, SQLite checks the complete immutable ordinal inventory through
+its covering index. At the hard default cap this may scan at most 500,001 index entries
+with constant-size aggregate output, so small reads do not promise constant-time
+metadata work. Injected `TextExtractor` adapters are trusted cooperative code and must
+honor bounds and cancellation. The HTML adapter uses a private caught unwind to stop
+html5ever on bounded cancellation/resource errors; builds with `panic=abort` cannot
+offer that recoverable adapter guarantee.
 
 ## Automatic agent instrument bindings
 
@@ -120,10 +243,10 @@ Integration tests exercise real Python children and SQLite: dispatch cancellatio
 
 `AgentRuntime` uses an explicit `RunSubject::Thesis` or `RunSubject::Conversation`.
 The legacy `agent-fixture` intentionally requires a real persisted thesis. Durable
-conversations use application-owned storage and need no thesis or assessment.
-Passage extraction, background refresh, live model acceptance, and desktop rendering
-remain outside this milestone. Document observations retain original evidence metadata;
-they do not imply extracted filing text.
+conversations and the passage fixture use application-owned storage and need no thesis
+or assessment. Background refresh, live model acceptance, durable review passage
+capture and desktop rendering remain outside this milestone. A document observation
+retains original evidence metadata; only explicit preparation creates filing text.
 
 ## Durable conversation CLI
 

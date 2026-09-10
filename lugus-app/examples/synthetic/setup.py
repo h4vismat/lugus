@@ -68,3 +68,18 @@ for provider in blocked['providers']:
     if provider['instance_id'] == 'market':
         provider['config']['mode'] = 'apple_price_blocked'
 write("blocked.json", blocked)
+
+# Explicit document modes preserve the legacy provider's text/plain behavior while
+# making the HTML passage flow reproducible against changed bytes at one source URL.
+for name, mode in [("passage-html.json", "filing_html"),
+                   ("passage-revised.json", "filing_html_revised")]:
+    passage = json.loads(json.dumps(config))
+    for provider in passage["providers"]:
+        if provider["instance_id"] == "filings":
+            provider["config"]["mode"] = mode
+    write(name, passage)
+write("passage-document.json", {
+    "operation": "document", "instance_id": "filings",
+    "source_url": "https://example.test/filing",
+})
+write("document-projection.json", {"kind": "document"})

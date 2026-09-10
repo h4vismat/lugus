@@ -75,6 +75,9 @@ async fn agent_fixture(
     Ok(json!({"scope":scope,"thesis":thesis,"report":result?,"receipts":runtime.receipts}))
 }
 async fn local(app: &Application, scope: &Scope, command: &str, args: &[&str]) -> CliResult<Value> {
+    if let Some(result) = support::passages::local(app, scope, command, args).await {
+        return result;
+    }
     match (command, args) {
         ("fetch", [file]) => {
             let command = read_json(file).await?;

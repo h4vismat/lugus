@@ -1,5 +1,6 @@
 //! Deterministic AgentRuntime adapter for CLI acceptance, with no model or network dependency.
 pub mod conversations;
+pub mod passages;
 use lugus_agent::reviews::ThesisRevision;
 use lugus_agent::{runtime::*, tools::*};
 use lugus_app::*;
@@ -40,7 +41,7 @@ type AgentResult<T> = lugus_agent::error::Result<T>;
 fn failure(message: &str) -> lugus_agent::error::Error {
     lugus_agent::error::Error::Tool(message.into())
 }
-async fn invoke(
+pub(super) async fn invoke(
     request: &RunRequest,
     tools: &dyn ToolExecutor,
     events: &mpsc::Sender<RuntimeEvent>,

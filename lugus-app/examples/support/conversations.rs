@@ -22,6 +22,10 @@ enum Fixture {
         expected_message_ids: Vec<String>,
         expected_dataset_id: String,
     },
+    Passage {
+        #[serde(flatten)]
+        fixture: super::passages::PassageFixture,
+    },
 }
 impl Fixture {
     fn validate(&self) -> Result<()> {
@@ -55,6 +59,7 @@ impl Fixture {
                 }
                 validate_id(expected_dataset_id)?;
             }
+            Self::Passage { fixture } => fixture.validate()?,
         }
         Ok(())
     }
@@ -153,6 +158,7 @@ impl AgentRuntime for Runtime {
                 }
                 json!({"subject_kind":"conversation","answer":"Prior messages and selected dataset verified in a fresh runtime.","message_ids":ids,"dataset_id":expected_dataset_id})
             }
+            Fixture::Passage { fixture } => fixture.run(&request, tools, &events).await?,
         };
         Ok(RunReport {
             run_id: request.run_id,
@@ -479,7 +485,7 @@ async fn run(args: &[&str], output: &Output) -> CliResult<Value> {
         if *command == "continue" && !matches!(fixture, Fixture::Continue { .. }) {
             return Err(invalid().into());
         }
-        let offline = matches!(fixture, Fixture::Continue { .. });
+        let offline = matches!(fixture, Fixture::Continue { .. } | Fixture::Passage { .. });
         let app = ApplicationConfig::load(config).await?.open(offline).await?;
         return execute(app, request, fixture, output).await;
     }

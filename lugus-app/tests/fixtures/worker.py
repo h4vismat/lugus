@@ -6,6 +6,9 @@ import pathlib
 import select
 import sys
 
+FILING_HTML = b'''<!doctype html><html><head><meta charset="utf-8"><title>Hidden title</title><style>.x{display:none}</style></head><body><h1>Risk factors</h1><p>Revenue &amp; cash <b>grew</b>.</p><ix:hidden><ix:nonFraction>999999</ix:nonFraction></ix:hidden><p>S\xc3\xa3o Paulo: <ix:nonFraction>(1,234.50)</ix:nonFraction> USD</p><table><tr><th>Year</th><th>Revenue</th></tr><tr><td>2025</td><td>1,234.50</td></tr></table><script>bad()</script><template>secret</template><p hidden>hidden</p><p style="display: none">invisible</p></body></html>'''
+FILING_HTML_REVISED = FILING_HTML.replace(b"Revenue &amp; cash <b>grew</b>.", b"Revenue &amp; cash <b>fell sharply</b>.")
+
 for line in sys.stdin:
     req = json.loads(line)
     method, params = req['method'], req['params']
@@ -61,7 +64,13 @@ for line in sys.stdin:
             if mode == 'market_repeated_date' and not cursor:
                 result['next_cursor'] = 'page-two'
         elif method == 'filings.document':
-            result = {'source_url': params['source_url'], 'media_type': 'text/plain', 'content_base64': base64.b64encode(b'fixture document').decode(), 'retrieved_at': '2026-09-09T00:00:00Z'}
+            content = b'fixture document'
+            media_type = 'text/plain'
+            if mode == 'filing_html':
+                content, media_type = FILING_HTML, 'text/html; charset=utf-8'
+            elif mode == 'filing_html_revised':
+                content, media_type = FILING_HTML_REVISED, 'text/html; charset=utf-8'
+            result = {'source_url': params['source_url'], 'media_type': media_type, 'content_base64': base64.b64encode(content).decode(), 'retrieved_at': '2026-09-09T00:00:00Z'}
         elif method in ('filings.list', 'fundamentals.facts'):
             common = {'company': params['company'], 'filing_id': 'first' if not cursor else 'second', 'form': '10-K', 'filed': '2024-02-01', 'source_url': 'https://example.test/filing', 'retrieved_at': '2026-09-09T00:00:00Z'}
             if method == 'filings.list':
