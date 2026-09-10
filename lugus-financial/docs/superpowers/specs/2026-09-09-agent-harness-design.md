@@ -1,7 +1,7 @@
 # Lugus agent harness and durable knowledge
 
 Date: 2026-09-09
-Status: Draft for user review
+Status: Approved by the user
 Implementation target: sibling workspace crate `lugus-agent`
 
 ## Purpose and agreed product behavior
