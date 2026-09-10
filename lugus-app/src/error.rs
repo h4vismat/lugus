@@ -9,6 +9,8 @@ pub enum ErrorKind {
     Unsupported,
     AmbiguousProvider,
     Unavailable,
+    AuthenticationRequired,
+    NeedsAttention,
     Deactivated,
     MissingData,
     ScopeMismatch,

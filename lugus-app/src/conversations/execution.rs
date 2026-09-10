@@ -135,6 +135,14 @@ pub(super) async fn execute(
                 Ok(Err(lugus_agent::Error::Timeout)) => {
                     failed(ErrorKind::Timeout, "conversation runtime timed out")
                 }
+                Ok(Err(lugus_agent::Error::AuthenticationRequired)) => failed(
+                    ErrorKind::AuthenticationRequired,
+                    "conversation runtime requires authentication",
+                ),
+                Ok(Err(lugus_agent::Error::NeedsAttention(_))) => failed(
+                    ErrorKind::NeedsAttention,
+                    "conversation runtime requires attention",
+                ),
                 Ok(Err(_)) => failed(ErrorKind::Unavailable, "conversation runtime failed"),
                 Err(error) => RunCompletion::Failed { error },
             };

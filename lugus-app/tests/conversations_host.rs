@@ -263,6 +263,12 @@ impl AgentRuntime for Behavior {
     ) -> lugus_agent::Result<RunReport> {
         match self.mode {
             "panic" => panic!("runtime fixture"),
+            "authentication" => return Err(lugus_agent::Error::AuthenticationRequired),
+            "attention" => {
+                return Err(lugus_agent::Error::NeedsAttention(
+                    "private diagnostic".repeat(2048),
+                ));
+            }
             "retain_events" => {
                 *self.late_events.lock().unwrap() = Some(events.clone());
             }
@@ -1243,4 +1249,74 @@ async fn unresolved_accepted_start_failure_survives_in_shared_shutdown_outcome()
         RunStatus::Interrupted
     );
     recovered.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn authentication_required_survives_offline_reopening() {
+    actionable_runtime_failure_category("authentication", "authentication_required").await;
+}
+#[tokio::test]
+async fn needs_attention_survives_offline_reopening() {
+    actionable_runtime_failure_category("attention", "needs_attention").await;
+}
+async fn actionable_runtime_failure_category(mode: &'static str, expected_kind: &str) {
+    let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
+    let (behavior, _, _) = Behavior::new(mode);
+    let host = ConversationHost::start(
+        h.app.clone(),
+        Arc::new(behavior.clone()),
+        ConversationOptions::default(),
+    )
+    .await
+    .unwrap();
+    let c = host.create("create", "Research").await.unwrap();
+    let run = host.send(send(&c, "one")).await.unwrap();
+    let completed = terminal(&host, &c, &run).await;
+    host.shutdown().await.unwrap();
+    let offline = SqliteApplicationStore::open(
+        &h.application,
+        Box::new(lugus_financial::storage::SqliteRepository::open(&h.financial).unwrap()),
+        Limits::default(),
+        Box::new(SystemClock),
+        Box::new(RandomIds::new().unwrap()),
+    )
+    .unwrap();
+    let restored = offline.run(&c.id, &run.id).unwrap();
+    assert_eq!(restored, completed);
+    for record in [&completed, &restored] {
+        assert_eq!(record.status, RunStatus::Failed);
+        let error = record.error.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(error.kind).unwrap(),
+            expected_kind,
+            "{mode}"
+        );
+        let encoded = serde_json::to_string(error).unwrap();
+        assert!(!encoded.contains("private diagnostic"));
+        assert!(encoded.len() <= AppError::MAX_SERIALIZED_JSON_BYTES);
+        assert!(!error.retryable);
+    }
+    assert_eq!(offline.messages(&c.id, page()).unwrap().items.len(), 1);
+    assert_eq!(
+        offline.messages(&c.id, page()).unwrap().items[0].role,
+        MessageRole::User
+    );
+    assert!(
+        offline
+            .tool_records(&c.id, &run.id, page())
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert_eq!(behavior.closes.load(Ordering::SeqCst), 1);
+    let raw = rusqlite::Connection::open(&h.application).unwrap();
+    let (payload, completion): (String, String) = raw
+        .query_row(
+            "SELECT payload,completion FROM conversation_runs WHERE id=?1",
+            [&run.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(!payload.contains("private diagnostic"));
+    assert!(!completion.contains("private diagnostic"));
 }

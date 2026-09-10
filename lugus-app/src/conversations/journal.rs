@@ -83,6 +83,8 @@ impl Journal {
             }
             calls.pending.values().cloned().collect()
         };
+        #[cfg(test)]
+        tests::draining(&self.inner.attempt);
         for mut done in pending {
             while !*done.borrow_and_update() {
                 if done.changed().await.is_err() {
@@ -210,8 +212,12 @@ impl ToolExecutor for Journal {
                 Ok(Ok(value)) => value,
                 Ok(Err(error)) | Err(error) => journal.fail(error),
             };
-            result.send_replace(Some(value));
+            // A returned receipt must no longer count as an outstanding effect:
+            // another worker may immediately finish the runtime and drain us.
             journal.calls().pending.remove(&key);
+            result.send_replace(Some(value));
+            #[cfg(test)]
+            tests::after_publication(&journal.inner.attempt).await;
             done.send_replace(true);
         });
         loop {
@@ -231,5 +237,171 @@ fn error_result(error: &AppError) -> ToolResult {
     ToolResult {
         success: false,
         content: serde_json::to_string(error).expect("bounded error serializes"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        HostBounds, Limits, PageRequest, RandomIds, RepositoryFactory, SqliteApplicationStore,
+        SqliteRepositoryFactory, SystemClock,
+    };
+    use lugus_agent::{AgentRuntime, RunOutcome, RunReport, RunRequest, RuntimeEvent};
+    use std::{sync::OnceLock, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    struct PublicationGate {
+        published: Semaphore,
+        draining: Semaphore,
+        release: Semaphore,
+        finished: Semaphore,
+    }
+    fn gates() -> &'static Mutex<BTreeMap<String, Arc<PublicationGate>>> {
+        static GATES: OnceLock<Mutex<BTreeMap<String, Arc<PublicationGate>>>> = OnceLock::new();
+        GATES.get_or_init(Mutex::default)
+    }
+    fn gate(attempt: &RunAttempt) -> Option<Arc<PublicationGate>> {
+        gates()
+            .lock()
+            .unwrap()
+            .get(attempt.conversation_id())
+            .cloned()
+    }
+    pub(super) fn draining(attempt: &RunAttempt) {
+        if let Some(gate) = gate(attempt) {
+            gate.draining.add_permits(1);
+        }
+    }
+    pub(super) async fn after_publication(attempt: &RunAttempt) {
+        if let Some(gate) = gate(attempt) {
+            gate.published.add_permits(1);
+            gate.release.acquire().await.unwrap().forget();
+            gate.finished.add_permits(1);
+        }
+    }
+    async fn reached(signal: &Semaphore) {
+        tokio::time::timeout(Duration::from_secs(3), signal.acquire())
+            .await
+            .expect("supervision reached test gate")
+            .unwrap()
+            .forget();
+    }
+    #[derive(Clone)]
+    struct ImmediateRuntime(Arc<Mutex<Option<ToolResult>>>);
+    #[async_trait::async_trait]
+    impl RuntimeFactory for ImmediateRuntime {
+        async fn create(&self) -> Result<Box<dyn AgentRuntime>> {
+            Ok(Box::new(self.clone()))
+        }
+    }
+    #[async_trait::async_trait]
+    impl AgentRuntime for ImmediateRuntime {
+        async fn run(
+            &mut self,
+            request: RunRequest,
+            tools: &dyn ToolExecutor,
+            _: mpsc::Sender<RuntimeEvent>,
+            _: watch::Receiver<bool>,
+        ) -> lugus_agent::Result<RunReport> {
+            let result = tools
+                .execute(ToolCall {
+                    run_id: request.run_id.clone(),
+                    call_id: "list-bindings".into(),
+                    name: "lugus_list_bindings".into(),
+                    arguments: serde_json::json!({"page": {"offset": 0, "limit": 10}}),
+                })
+                .await;
+            *self.0.lock().unwrap() = Some(result);
+            Ok(RunReport {
+                run_id: request.run_id,
+                outcome: RunOutcome::Completed,
+                final_text: "Answer after recorded tool result".into(),
+            })
+        }
+        async fn close(&mut self) -> lugus_agent::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn immediate_runtime_completion_after_tool_publication_keeps_completed_answer() {
+        let root = tempfile::tempdir().unwrap();
+        let financial = root.path().join("financial.sqlite");
+        let repositories = Arc::new(SqliteRepositoryFactory::new(&financial));
+        repositories.initialize().unwrap();
+        let store = SqliteApplicationStore::open(
+            root.path().join("application.sqlite"),
+            Box::new(lugus_financial::storage::SqliteRepository::open(&financial).unwrap()),
+            Limits::default(),
+            Box::new(SystemClock),
+            Box::new(RandomIds::new().unwrap()),
+        )
+        .unwrap();
+        let app = Application::start(
+            vec![],
+            repositories,
+            Box::new(store),
+            Limits::default(),
+            HostBounds::default(),
+            Box::new(RandomIds::new().unwrap()),
+        )
+        .await
+        .unwrap();
+        let runtime = ImmediateRuntime(Arc::new(Mutex::new(None)));
+        let host = ConversationHost::start(
+            app,
+            Arc::new(runtime.clone()),
+            ConversationOptions::default(),
+        )
+        .await
+        .unwrap();
+        let c = host.create("create", "Research").await.unwrap();
+        let gate = Arc::new(PublicationGate {
+            published: Semaphore::new(0),
+            draining: Semaphore::new(0),
+            release: Semaphore::new(0),
+            finished: Semaphore::new(0),
+        });
+        gates().lock().unwrap().insert(c.id.clone(), gate.clone());
+        let run = host
+            .send(SendMessageRequest {
+                conversation_id: c.id.clone(),
+                request_id: "one".into(),
+                text: "List bindings".into(),
+                selected: vec![],
+            })
+            .await
+            .unwrap();
+        reached(&gate.published).await;
+        // The runtime has consumed the response and returned Completed while the
+        // publishing task is still held at the exact old race window.
+        reached(&gate.draining).await;
+        gate.release.add_permits(1);
+        reached(&gate.finished).await;
+        let completed = tokio::time::timeout(Duration::from_secs(3), host.wait(&c.id, &run.id))
+            .await
+            .unwrap()
+            .unwrap();
+        let page = PageRequest {
+            offset: 0,
+            limit: 10,
+        };
+        let records = host.tool_records(&c.id, &run.id, page).await.unwrap().items;
+        let messages = host.messages(&c.id, page).await.unwrap().items;
+        host.shutdown().await.unwrap();
+        gates().lock().unwrap().remove(&c.id);
+        let returned = runtime.0.lock().unwrap().clone().unwrap();
+        assert!(returned.success);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].outcome,
+            Some(ToolOutcome::Returned { result: returned })
+        );
+        assert_eq!(completed.status, RunStatus::Completed);
+        assert!(completed.error.is_none());
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, MessageRole::Assistant);
+        assert_eq!(messages[1].text, "Answer after recorded tool result");
     }
 }

@@ -970,3 +970,80 @@ fn admitted_failure_rolls_back_if_terminal_metadata_cannot_commit() {
     assert_eq!(s.run(&c.id, &admitted.id).unwrap(), admitted);
     assert_eq!(s.messages(&c.id, page()).unwrap().items.len(), 1);
 }
+
+#[test]
+fn external_metadata_commit_during_preparation_conflicts_without_admitting_message() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+    struct PreparationClock {
+        armed: Arc<AtomicBool>,
+        entered: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl Clock for PreparationClock {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.entered.send(()).unwrap();
+                self.release.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+            chrono::Utc::now()
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let financial = dir.path().join("financial.sqlite");
+    let armed = Arc::new(AtomicBool::new(false));
+    let (entered, preparing) = mpsc::sync_channel(1);
+    let (release, resume) = mpsc::sync_channel(1);
+    let mut preparing_store = SqliteApplicationStore::open(
+        &path,
+        Box::new(lugus_financial::storage::SqliteRepository::open(&financial).unwrap()),
+        Limits::default(),
+        Box::new(PreparationClock {
+            armed: armed.clone(),
+            entered,
+            release: resume,
+        }),
+        Box::new(RandomIds::new().unwrap()),
+    )
+    .unwrap();
+    let c = preparing_store
+        .create_conversation("create", "Research")
+        .unwrap();
+    let lease = LocalExecutionLease::acquire(&path).unwrap();
+    let epoch = preparing_store.activate(&lease).unwrap();
+    let mut external = store(&path, &financial, ConversationLimits::default());
+    let before = external.workspace(&c.id).unwrap();
+    let req = request(&c, "one");
+    armed.store(true, Ordering::SeqCst);
+    let preparation = std::thread::spawn(move || {
+        let result = preparing_store.admit(&epoch, &req);
+        (preparing_store, epoch, req, result)
+    });
+    // now() occurs after the initial snapshot transaction and selected-reference
+    // reads, before context serialization and the final immediate transaction.
+    preparing.recv_timeout(Duration::from_secs(3)).unwrap();
+    let committed = external
+        .mutate_workspace(
+            &c.id,
+            before.revision,
+            &WorkspaceMutation::Reorder { view_ids: vec![] },
+        )
+        .unwrap();
+    assert_eq!(committed.revision, before.revision + 1);
+    release.send(()).unwrap();
+    let (mut preparing_store, epoch, req, result) = preparation.join().unwrap();
+    assert_eq!(result.unwrap_err().kind, ErrorKind::Conflict);
+    assert!(external.messages(&c.id, page()).unwrap().items.is_empty());
+    assert!(external.runs(&c.id, page()).unwrap().items.is_empty());
+    assert_eq!(preparing_store.workspace(&c.id).unwrap(), committed);
+    let retry = preparing_store.admit(&epoch, &req).unwrap();
+    assert_eq!(retry.status, RunStatus::Admitted);
+    assert_eq!(preparing_store.admit(&epoch, &req).unwrap(), retry);
+    assert_eq!(external.messages(&c.id, page()).unwrap().items.len(), 1);
+    assert_eq!(external.runs(&c.id, page()).unwrap().items.len(), 1);
+}
