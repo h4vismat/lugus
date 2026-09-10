@@ -7,6 +7,8 @@ use lugus_agent::tools::{ToolCall, ToolExecutor, ToolResult, ToolSpec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+mod bindings;
+
 pub struct ResearchExecutor {
     application: Application,
     scope: Scope,
@@ -23,6 +25,7 @@ impl ResearchExecutor {
         let offering = application.offering()?;
         let mut specs = fetch_tool_specs(&offering);
         specs.extend(cached_tool_specs(application.limits()));
+        specs.extend(bindings::tool_specs(application.limits(), &offering));
         Ok(Self {
             application,
             scope,
@@ -44,6 +47,9 @@ impl ResearchExecutor {
                 false,
             ));
         }
+        if bindings::NAMES.contains(&call.name.as_str()) {
+            return self.binding_call(&scope, call).await;
+        }
         if let Some(name) = call
             .name
             .strip_prefix("lugus_")
@@ -64,12 +70,15 @@ impl ResearchExecutor {
         }
         let command = decode_fetch_call(call, limit)?;
         let receipt = self.application.submit(&scope, &self.offering, command)?;
+        self.await_job(&scope, receipt).await
+    }
+    async fn await_job(&self, scope: &Scope, receipt: JobReceipt) -> Result<(bool, Value)> {
         let mut guard = CancelOnDrop {
             application: self.application.clone(),
             scope: scope.clone(),
             id: Some(receipt.id.clone()),
         };
-        let terminal = self.application.wait(&scope, &receipt.id).await?;
+        let terminal = self.application.wait(scope, &receipt.id).await?;
         guard.id = None;
         Ok((terminal.state == JobState::Succeeded, self.value(terminal)?))
     }
@@ -238,7 +247,7 @@ fn projection_schema() -> Value {
         ("periods", periods),
     ]);
     json!({"oneOf":[
-        object(vec![("kind",kind("prices")),("run_id",run()),("query",crate::agent_contract::price_query_schema()),("series",json!({"type":"string","enum":["Close","AdjustedClose"]}))]),
+        object(vec![("kind",kind("prices")),("run_id",run()),("query",crate::agent_contract::price_query_schema()),("series",json!({"type":"string","enum":["close","adjusted_close"]}))]),
         object(vec![("kind",kind("facts")),("run_id",run()),("query",metric)]),
         object(vec![("kind",kind("filings")),("run_id",run())]),
         object(vec![("kind",kind("resolution")),("run_id",run())]),

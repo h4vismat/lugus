@@ -115,3 +115,90 @@ fn cli_runs_manual_and_real_thesis_backed_agent_then_reopens_offline() {
         .unwrap();
     assert!(!missing.status.success());
 }
+
+#[test]
+fn cli_automatically_binds_from_real_thesis_and_refuses_incompatible_or_ambiguous_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let p = |name: &str| root.path().join(name).to_str().unwrap().to_string();
+    let setup = Command::new("python3")
+        .args([
+            &format!("{}/examples/synthetic/setup.py", env!("CARGO_MANIFEST_DIR")),
+            root.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(setup.status.success());
+    cli(&[
+        "thesis-create",
+        &p("thesis.sqlite"),
+        "binding-thesis",
+        &p("thesis.txt"),
+    ]);
+    let agent = cli(&[
+        "agent-fixture",
+        &p("config.json"),
+        "workspace",
+        &p("thesis.sqlite"),
+        "binding-thesis",
+        &p("binding.json"),
+    ]);
+    let r = &agent["receipts"];
+    assert_eq!(r["binding"]["policy"], "instrument-binding-v1");
+    assert_eq!(r["dataset"]["binding_id"], r["binding"]["id"]);
+    assert_eq!(r["fetch"]["binding_id"], r["binding"]["id"]);
+    assert_eq!(r["fetch"]["provider"]["instance_id"], "market");
+    assert_eq!(
+        r["fetch"]["command"]["query"]["instrument"]["value"],
+        "AAPL"
+    );
+    assert_eq!(r["view"]["kind"], "price_chart");
+    for config in [
+        "wrong-issuer.json",
+        "wrong-exchange.json",
+        "missing-evidence.json",
+        "multiple-listings.json",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lugus-research"))
+            .args([
+                "agent-fixture",
+                &p(config),
+                "workspace",
+                &p("thesis.sqlite"),
+                "binding-thesis",
+                &p("binding.json"),
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{config}");
+    }
+    std::fs::remove_file(p("manifest.json")).unwrap();
+    let id = r["binding"]["id"].as_str().unwrap();
+    let b = cli(&[
+        "read-binding",
+        &p("offline.json"),
+        "workspace",
+        "offline",
+        id,
+    ]);
+    assert_eq!(b["record"]["id"], id);
+    let history = cli(&[
+        "binding-history",
+        &p("offline.json"),
+        "workspace",
+        "history",
+        id,
+        "0",
+        "10",
+    ]);
+    assert_eq!(history["events"].as_array().unwrap().len(), 1);
+    let page = cli(&[
+        "read",
+        &p("offline.json"),
+        "workspace",
+        "page",
+        r["dataset"]["id"].as_str().unwrap(),
+        "0",
+        "1",
+    ]);
+    assert_eq!(page["header"]["binding_id"], id);
+}

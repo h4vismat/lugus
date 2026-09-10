@@ -16,27 +16,42 @@ for line in sys.stdin:
         root.mkdir(exist_ok=True)
         (root / 'pid').write_text(str(os.getpid()))
         result = {'protocol_version': 2 if mode == 'startup_failure' else 1,
-                  'plugin_id': 'worker-fixture', 'plugin_version': '1',
+                  'plugin_id': 'worker-fixture', 'plugin_version': config.get('version', '1'),
                   'capabilities': {'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1, 'instrument_lookup': 2 if mode == 'instrument_unsupported' else 1}}
     else:
         cursor = params.get('cursor')
         (root / ('second' if cursor else 'first')).touch()
-        if mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
+        if method == 'market_data.daily': (root / 'prices-started').touch()
+        if (mode == 'apple_price_blocked' and method == 'market_data.daily') or mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
             while not (root / 'release').exists():
                 time.sleep(0.005)
         if mode == 'protocol':
             print('invalid-json', flush=True)
             continue
-        if mode == 'source_error' or (mode == 'search_rate_limited' and method == 'company_resolution.search'):
+        if (mode == 'apple_price_error' and method == 'market_data.daily') or mode == 'source_error' or (mode == 'search_rate_limited' and method == 'company_resolution.search'):
             print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'error': {'code': -32000, 'message': 'source secret', 'data': {'kind': 'rate_limited', 'retry_after_seconds': 3}}}), flush=True)
             continue
         result = {'items': [], 'next_cursor': None}
         if method == 'company_resolution.search':
             result.update(snapshot='fixture-snapshot', coverage='fixture universe')
+            if mode.startswith('apple'):
+                result['items'] = [{'identifier': {'namespace':'sec:cik','value':'0000320193'}, 'name':'Apple Inc.', 'aliases':[], 'listings':[{'ticker':{'namespace':'sec:ticker','value':'AAPL'},'exchange':{'namespace':'sec:exchange','value':'NASDAQ'}}], 'source_url':'https://example.test/apple','source_checksum':'a'*64,'retrieved_at':'2026-09-09T00:00:00Z','match_reasons':['name_substring']}]
+                if mode == 'apple_escaped': result['items'][0]['source_url'] += '\\' * 1024
+                if mode == 'apple_multiple':
+                    result['items'][0]['listings'].append({'ticker':{'namespace':'sec:ticker','value':'APPLB'},'exchange':{'namespace':'sec:exchange','value':'NYSE'}})
+                if params['query']['kind'] == 'identifier':
+                    identifier = params['query']['identifier']
+                    if identifier['value'].upper() in ('AAPL', '0000320193'):
+                        result['items'][0]['match_reasons'] = ['exact_identifier']
+                    else:
+                        result['items'] = []
         elif method == 'company_resolution.lookup':
             result = {'identifier': params['identifier'], 'name': 'Fixture', 'aliases': [], 'listings': [], 'source_url': 'https://example.test/company', 'source_checksum': 'a' * 64, 'retrieved_at': '2026-09-09T00:00:00Z', 'match_reasons': []}
         elif method == 'instrument_lookup.lookup':
             result = {'instrument': {'namespace':'yahoo:symbol','value':'AAPL'},'issuer_name':'Apple Inc.','ticker':'AAPL','exchange':{'namespace':'yahoo:exchange','value':'NMS'},'kind':'equity','issuer_identifiers':[],'source_url':'https://example.test/instrument','source_checksum':'b'*64,'retrieved_at':'2026-09-09T00:00:00Z'}
+            if mode == 'apple_wrong_issuer': result['issuer_name'] = 'Another Issuer Inc.'
+            if mode == 'apple_wrong_exchange': result['exchange']['value'] = 'NYQ'
+            if mode == 'apple_missing': result['issuer_name'] = None
         elif method == 'market_data.daily':
             result = {'items': [{'instrument': params['instrument'], 'date': '2024-01-02', 'open': '100', 'high': '102', 'low': '99', 'close': '101', 'volume': 123, 'adjusted_close': '100.5', 'currency': 'USD', 'exchange_timezone': 'America/New_York', 'price_basis': 'source_reported', 'precision': 'decimal_source', 'source_url': 'https://example.test/history', 'retrieved_at': '2026-09-09T00:00:00Z'}], 'next_cursor': None, 'coverage': {'first_date': '2024-01-02', 'last_date': '2024-01-02', 'completeness': 'unverified'}}
             if mode == 'market_repeated_date' and not cursor:

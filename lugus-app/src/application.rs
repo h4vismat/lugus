@@ -1,5 +1,7 @@
 //! Shared admission, lifecycle and supervised jobs. SQL always crosses a blocking boundary.
 use crate::*;
+mod bindings;
+pub use bindings::BoundPriceRequest;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -409,6 +411,15 @@ impl Application {
         offering: &Offering,
         command: FetchCommand,
     ) -> Result<JobReceipt> {
+        self.submit_prepared(scope, offering, command, None)
+    }
+    fn submit_prepared(
+        &self,
+        scope: &Scope,
+        offering: &Offering,
+        command: FetchCommand,
+        binding: Option<BindingRecord>,
+    ) -> Result<JobReceipt> {
         scope.validate()?;
         command.validate()?;
         crate::agent_contract::check_serialized_size(&command, self.inner.limits.max_input_bytes)?;
@@ -468,11 +479,17 @@ impl Application {
         let _ = self.inner.events.send(ApplicationEvent { job: initial });
         let app = self.clone();
         tokio::spawn(async move {
-            app.supervise(id, job, status).await;
+            app.supervise(id, job, status, binding).await;
         });
         Ok(receipt)
     }
-    async fn supervise(&self, id: String, job: JobHandle, status: watch::Sender<JobStatus>) {
+    async fn supervise(
+        &self,
+        id: String,
+        job: JobHandle,
+        status: watch::Sender<JobStatus>,
+        binding: Option<BindingRecord>,
+    ) {
         let mut changes = job.subscribe_state();
         let result = job.wait();
         tokio::pin!(result);
@@ -489,7 +506,10 @@ impl Application {
         };
         let mut terminal = status.borrow().clone();
         match result {
-            Ok(result) => {
+            Ok(mut result) => {
+                // Only scoped preparation creates this host-owned context; keep it until
+                // terminal persistence even when the binding is revoked during work.
+                result.provenance.binding_id = binding.map(|record| record.id);
                 terminal.state = result.state();
                 terminal.error = result.error.clone();
                 match self

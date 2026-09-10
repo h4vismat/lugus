@@ -29,7 +29,7 @@ config = {
     "providers": [{
         "instance_id": name, "manifest": "manifest.json", "active": True,
         "config": {"mode": mode, "barrier": str(root / name)},
-    } for name, mode in [("filings", "ok"), ("market", "ok"), ("unavailable", "startup_failure")]],
+    } for name, mode in [("filings", "apple"), ("market", "apple"), ("unavailable", "startup_failure")]],
     "limits": limits,
     "host_bounds": {"max_pending_jobs": 16, "max_terminal_jobs": 16, "event_capacity": 16},
 }
@@ -53,3 +53,10 @@ write("prices.json", {
     "while preserving each provider's exact source and retrieval provenance.\n"
 )
 print(root)
+
+write("binding.json", {"company_instance_id":"filings","market_instance_id":"market","input":"Apple","native_namespace":"yahoo:symbol","start":"2024-01-01","end":"2024-01-03","page_size":10})
+for name, target, mode in [("wrong-issuer.json","market","apple_wrong_issuer"),("wrong-exchange.json","market","apple_wrong_exchange"),("missing-evidence.json","market","apple_missing"),("multiple-listings.json","filings","apple_multiple")]:
+    altered = json.loads(json.dumps(config))
+    for provider in altered['providers']:
+        if provider['instance_id'] == target: provider['config']['mode'] = mode
+    write(name, altered)

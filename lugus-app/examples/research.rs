@@ -36,7 +36,7 @@ async fn agent_fixture(
     thesis_id: &str,
     command_file: &str,
 ) -> CliResult<Value> {
-    let command: FetchCommand = read_json(command_file).await?;
+    let command: support::FixtureCommand = read_json(command_file).await?;
     let db = db.to_string();
     let thesis_id = thesis_id.to_string();
     let thesis =
@@ -55,7 +55,7 @@ async fn agent_fixture(
         tools: tools.tool_specs().to_vec(),
         limits: RunLimits {
             timeout: Duration::from_secs(120),
-            max_tool_calls: 5,
+            max_tool_calls: command.tool_count(),
             max_tool_result_bytes: app.limits().max_output_bytes,
         },
     };
@@ -75,6 +75,45 @@ async fn local(app: &Application, scope: &Scope, command: &str, args: &[&str]) -
         ("fetch", [file]) => {
             let command = read_json(file).await?;
             match app.submit_manual(scope, command) {
+                Ok(job) => value(app.wait(scope, &job.id).await?),
+                Err(error) => Ok(json!({"scope":scope,"error":error})),
+            }
+        }
+        ("bind", [file]) => value(app.create_binding(scope, &read_json(file).await?).await?),
+        ("read-binding", [id]) => value(app.read_binding(scope, id).await?),
+        ("list-bindings", [offset, limit]) => value(
+            app.list_bindings(
+                scope,
+                PageRequest {
+                    offset: offset.parse()?,
+                    limit: limit.parse()?,
+                },
+            )
+            .await?,
+        ),
+        ("revoke-binding", [id]) => value(
+            app.revoke_binding(
+                scope,
+                &RevokeBindingRequest {
+                    binding_id: (*id).into(),
+                },
+            )
+            .await?,
+        ),
+        ("binding-history", [id, offset, limit]) => value(
+            app.binding_history(
+                scope,
+                id,
+                PageRequest {
+                    offset: offset.parse()?,
+                    limit: limit.parse()?,
+                },
+            )
+            .await?,
+        ),
+        ("bound-prices", [file]) => {
+            let request = read_json(file).await?;
+            match app.fetch_bound_prices_manual(scope, &request).await {
                 Ok(job) => value(app.wait(scope, &job.id).await?),
                 Err(error) => Ok(json!({"scope":scope,"error":error})),
             }
@@ -144,7 +183,7 @@ async fn run(args: &[&str]) -> CliResult<Value> {
     };
     let app = ApplicationConfig::load(config)
         .await?
-        .open(*command != "fetch")
+        .open(!matches!(*command, "fetch" | "bound-prices"))
         .await?;
     let result = match app.scope(workspace, request, None) {
         Ok(scope) => local(&app, &scope, command, tail).await,

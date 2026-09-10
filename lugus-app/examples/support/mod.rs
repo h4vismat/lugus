@@ -7,8 +7,33 @@ use tokio::sync::{mpsc, watch};
 
 pub struct FixtureRuntime {
     pub thesis: ThesisRevision,
-    pub command: FetchCommand,
+    pub command: FixtureCommand,
     pub receipts: Value,
+}
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum FixtureCommand {
+    Fetch(FetchCommand),
+    Binding(BindingWorkflow),
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindingWorkflow {
+    company_instance_id: String,
+    market_instance_id: String,
+    input: String,
+    native_namespace: String,
+    start: chrono::NaiveDate,
+    end: chrono::NaiveDate,
+    page_size: usize,
+}
+impl FixtureCommand {
+    pub fn tool_count(&self) -> usize {
+        match self {
+            Self::Fetch(_) => 5,
+            Self::Binding(_) => 12,
+        }
+    }
 }
 type AgentResult<T> = lugus_agent::error::Result<T>;
 fn failure(message: &str) -> lugus_agent::error::Error {
@@ -22,6 +47,9 @@ async fn invoke(
     name: &str,
     arguments: Value,
 ) -> AgentResult<Value> {
+    if number > request.limits.max_tool_calls {
+        return Err(failure("fixture tool count exceeded"));
+    }
     if !request.tools.iter().any(|s| s.name == name) {
         return Err(failure("fixture tool was not offered"));
     }
@@ -56,8 +84,11 @@ impl FixtureRuntime {
         tools: &dyn ToolExecutor,
         events: &mpsc::Sender<RuntimeEvent>,
     ) -> AgentResult<()> {
+        let FixtureCommand::Fetch(command) = &self.command else {
+            return self.binding_sequence(request, tools, events).await;
+        };
         let mut arguments =
-            serde_json::to_value(&self.command).map_err(|_| failure("invalid fixture command"))?;
+            serde_json::to_value(command).map_err(|_| failure("invalid fixture command"))?;
         let operation = arguments
             .as_object_mut()
             .and_then(|v| v.remove("operation"))
@@ -170,10 +201,10 @@ impl AgentRuntime for FixtureRuntime {
         validate_request(&request)?;
         if request.thesis_id != self.thesis.thesis_id
             || request.context != self.thesis.text
-            || request.limits.max_tool_calls < 5
+            || request.limits.max_tool_calls < self.command.tool_count()
         {
             return Err(failure(
-                "fixture requires its real stored thesis and five tool calls",
+                "fixture requires its real stored thesis and the complete tool budget",
             ));
         }
         let _ = events.try_send(RuntimeEvent::Started {
@@ -188,6 +219,112 @@ impl AgentRuntime for FixtureRuntime {
         Ok(RunReport { run_id: request.run_id, outcome, final_text: "Research evidence stored and view request accepted; presentation has not been reported.".into() })
     }
     async fn close(&mut self) -> AgentResult<()> {
+        Ok(())
+    }
+}
+
+impl FixtureRuntime {
+    async fn binding_sequence(
+        &mut self,
+        request: &RunRequest,
+        tools: &dyn ToolExecutor,
+        events: &mpsc::Sender<RuntimeEvent>,
+    ) -> AgentResult<()> {
+        let FixtureCommand::Binding(config) = &self.command else {
+            unreachable!()
+        };
+        let resolution_job = invoke(
+            request,
+            tools,
+            events,
+            1,
+            "lugus_resolve_company",
+            json!({"instance_id":config.company_instance_id,"input":config.input}),
+        )
+        .await?;
+        let resolution_fetch = invoke(
+            request,
+            tools,
+            events,
+            2,
+            "lugus_read_fetch",
+            json!({"fetch_id":resolution_job["fetch_id"]}),
+        )
+        .await?;
+        // Resolve may perform an identifier search followed by a name fallback. The
+        // terminal run, not the empty initial search, supplies the selected evidence.
+        let run = resolution_fetch["runs"]
+            .as_array()
+            .and_then(|r| r.last())
+            .ok_or_else(|| failure("resolution run missing"))?;
+        let company_dataset = invoke(request,tools,events,3,"lugus_create_dataset",json!({"fetch_id":resolution_fetch["id"],"projection":{"kind":"resolution","run_id":run["id"]}})).await?;
+        let companies = invoke(
+            request,
+            tools,
+            events,
+            4,
+            "lugus_read_dataset",
+            json!({"dataset_id":company_dataset["id"],"page":{"offset":0,"limit":2}}),
+        )
+        .await?;
+        let rows = companies["rows"]
+            .as_array()
+            .ok_or_else(|| failure("invalid candidate page"))?;
+        if rows.len() != 1
+            || company_dataset["row_count"] != 1
+            || !companies["next_offset"].is_null()
+        {
+            return Err(failure("explicit company selection required"));
+        }
+        let company = &rows[0]["entry"];
+        let listings = company["candidate"]["listings"]
+            .as_array()
+            .ok_or_else(|| failure("listing evidence missing"))?;
+        if listings.len() != 1 {
+            return Err(failure("explicit listing selection required"));
+        }
+        let listing = &listings[0];
+        let lookup = invoke(request,tools,events,5,"lugus_lookup_instrument",json!({"instance_id":config.market_instance_id,"query":{"instrument":{"namespace":config.native_namespace,"value":listing["ticker"]["value"]}}})).await?;
+        let instrument_fetch = invoke(
+            request,
+            tools,
+            events,
+            6,
+            "lugus_read_fetch",
+            json!({"fetch_id":lookup["fetch_id"]}),
+        )
+        .await?;
+        let binding = invoke(request,tools,events,7,"lugus_create_binding",json!({"request":{"company_dataset_id":company_dataset["id"],"company_observation_id":company["observation_id"],"listing":listing,"instrument_fetch_id":instrument_fetch["id"],"supersedes":null}})).await?;
+        let job = invoke(request,tools,events,8,"lugus_fetch_bound_prices",json!({"binding_id":binding["id"],"start":config.start,"end":config.end,"page_size":config.page_size})).await?;
+        let fetch = invoke(
+            request,
+            tools,
+            events,
+            9,
+            "lugus_read_fetch",
+            json!({"fetch_id":job["fetch_id"]}),
+        )
+        .await?;
+        let dataset = invoke(request,tools,events,10,"lugus_create_dataset",json!({"fetch_id":fetch["id"],"projection":{"kind":"prices","run_id":fetch["runs"][0]["id"],"query":fetch["command"]["query"],"series":"close"}})).await?;
+        let page = invoke(
+            request,
+            tools,
+            events,
+            11,
+            "lugus_read_dataset",
+            json!({"dataset_id":dataset["id"],"page":{"offset":0,"limit":1}}),
+        )
+        .await?;
+        let view = invoke(
+            request,
+            tools,
+            events,
+            12,
+            "lugus_open_view",
+            json!({"dataset_id":dataset["id"],"kind":"price_chart"}),
+        )
+        .await?;
+        self.receipts = json!({"company_dataset":company_dataset,"companies":companies,"instrument_fetch":instrument_fetch,"binding":binding,"job":job,"fetch":fetch,"dataset":dataset,"page":page,"view":view});
         Ok(())
     }
 }
