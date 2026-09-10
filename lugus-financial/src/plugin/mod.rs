@@ -173,8 +173,10 @@ impl Plugin {
     pub async fn close(&mut self) -> Result<()> {
         self.stdin.take();
         self.stdout.take();
-        if let Some(mut child) = self.child.take() {
+        if let Some(child) = self.child.as_mut() {
             let kill = child.start_kill();
+            // Keep ownership in self across the await: cancellation must allow a
+            // subsequent close to explicitly finish reaping the same child.
             let wait = child.wait().await;
             if let Some(task) = self.stderr_task.take() {
                 task.abort();
@@ -182,6 +184,7 @@ impl Plugin {
             if let Err(error) = wait {
                 return Err(Error::new(ErrorKind::Unavailable, error.to_string()));
             }
+            self.child.take();
             // start_kill may fail for an already-exited child; wait is authoritative.
             let _ = kill;
         }
@@ -391,12 +394,19 @@ impl FilingsProvider for Plugin {
                 json!({"source_url":source_url,"max_bytes":max_bytes}),
             )
             .await?;
-        if document.source_url != source_url || document.bytes(max_bytes).is_err() {
+        let validation = document.bytes(max_bytes);
+        if document.source_url != source_url || validation.is_err() {
+            let message = if document.source_url == source_url
+                && validation
+                    .as_ref()
+                    .is_err_and(|error| error.message == "document exceeds size limit")
+            {
+                "document exceeds size limit"
+            } else {
+                "document URL, encoding or size is invalid"
+            };
             let _ = self.close().await;
-            return Err(Error::new(
-                ErrorKind::Protocol,
-                "document URL, encoding or size is invalid",
-            ));
+            return Err(Error::new(ErrorKind::Protocol, message));
         }
         Ok(document)
     }
@@ -471,5 +481,54 @@ impl crate::resolution::CompanyResolutionProvider for Plugin {
             ));
         }
         Ok(candidate)
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::{future::Future, task::Poll};
+
+    #[tokio::test]
+    async fn interrupted_close_retains_child_for_explicit_reaping() {
+        let mut plugin = Plugin::start(
+            Manifest {
+                id: "fixture".into(),
+                version: "1".into(),
+                protocol_version: 1,
+                command: "python3".into(),
+                args: vec![format!(
+                    "{}/tests/fixtures/plugin.py",
+                    env!("CARGO_MANIFEST_DIR")
+                )],
+            },
+            std::env::temp_dir(),
+            "close-test".into(),
+            json!({}),
+            Limits::default(),
+        )
+        .await
+        .unwrap();
+        let interrupted = {
+            let mut closing = std::pin::pin!(plugin.close());
+            std::future::poll_fn(|cx| {
+                Poll::Ready(match closing.as_mut().poll(cx) {
+                    Poll::Pending => true,
+                    Poll::Ready(result) => {
+                        result.unwrap();
+                        false
+                    }
+                })
+            })
+            .await
+        };
+        if interrupted {
+            assert!(
+                plugin.child.is_some(),
+                "an interrupted wait lost the only child handle"
+            );
+        }
+        plugin.close().await.unwrap();
+        assert!(plugin.child.is_none());
     }
 }

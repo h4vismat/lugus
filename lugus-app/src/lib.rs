@@ -7,3 +7,8 @@ pub mod error;
 pub use catalog::*;
 pub use domain::*;
 pub use error::*;
+
+pub mod provider;
+pub mod worker;
+pub use provider::*;
+pub use worker::*;

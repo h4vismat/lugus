@@ -325,11 +325,14 @@ dependencies = [
 name = "lugus-app"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "lugus-financial",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
