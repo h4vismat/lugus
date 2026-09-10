@@ -138,3 +138,28 @@ fn financial_metadata_is_bounded_and_empty_runs_remain_readable() {
         matches!(repo.bounded_financial_run(&provider(),id,ReadLimits{max_items:0,..limits()}),Err(BoundedReadError::Financial(e)) if e.kind==ErrorKind::InvalidRequest)
     );
 }
+
+#[test]
+fn repository_identity_is_counted_before_context_materialization() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("financial.db");
+    let mut repo = SqliteRepository::open(&path).unwrap();
+    let id = repo.start_market_run(&provider(), &query()).unwrap();
+    let sql = rusqlite::Connection::open(path).unwrap();
+    sql.execute(
+        "UPDATE repository_identity SET identity=?",
+        ["x".repeat(5000)],
+    )
+    .unwrap();
+    assert!(matches!(
+        repo.bounded_market_run(
+            &provider(),
+            id,
+            ReadLimits {
+                max_bytes: 1000,
+                ..limits()
+            }
+        ),
+        Err(BoundedReadError::LimitExceeded)
+    ));
+}

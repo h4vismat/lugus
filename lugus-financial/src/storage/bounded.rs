@@ -105,6 +105,14 @@ impl SqliteRepository {
             .query_row(metadata_sql, params![run_id, provider_key], |r| r.get(0))
             .optional()?
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "run not found for provider"))?;
+        let context_bytes: i64 = transaction.query_row(
+            "SELECT length(CAST(i.identity AS BLOB))+length(CAST(c.kind AS BLOB))+8 FROM repository_identity i JOIN ingestion_chronology c ON c.kind=?1 AND c.run_id=?2 WHERE i.singleton=1",
+            params![if market { "market" } else { "financial" }, run_id],
+            |row| row.get(0),
+        )?;
+        let metadata = metadata
+            .checked_add(context_bytes)
+            .ok_or(BoundedReadError::LimitExceeded)?;
         let identity_bytes = serde_json::to_vec(provider).map_err(Error::from)?.len();
         let budget = limits
             .max_bytes
