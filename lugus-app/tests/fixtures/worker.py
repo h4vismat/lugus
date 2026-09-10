@@ -21,13 +21,13 @@ for line in sys.stdin:
     else:
         cursor = params.get('cursor')
         (root / ('second' if cursor else 'first')).touch()
-        if mode == 'blocked' or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
+        if mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
             while not (root / 'release').exists():
                 time.sleep(0.005)
         if mode == 'protocol':
             print('invalid-json', flush=True)
             continue
-        if mode == 'source_error':
+        if mode == 'source_error' or (mode == 'search_rate_limited' and method == 'company_resolution.search'):
             print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'error': {'code': -32000, 'message': 'source secret', 'data': {'kind': 'rate_limited', 'retry_after_seconds': 3}}}), flush=True)
             continue
         result = {'items': [], 'next_cursor': None}

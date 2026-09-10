@@ -705,3 +705,68 @@ async fn ingestion_market_protocol_error_reaps_before_returning() {
 
 #[path = "worker/startup_cleanup.rs"]
 mod startup_cleanup;
+
+#[tokio::test]
+async fn resolution_failure_outranks_historical_read_limit() {
+    for (mode, expected, cancel) in [
+        ("search_blocked", ErrorKind::Cancelled, true),
+        ("search_blocked", ErrorKind::Timeout, false),
+        ("search_rate_limited", ErrorKind::RateLimited, false),
+    ] {
+        let h = Harness::start(
+            mode,
+            Limits {
+                max_items_per_fetch: 1,
+                max_read_page_items: 1,
+                operation_timeout: Duration::from_secs(1),
+                ..Limits::default()
+            },
+        )
+        .await;
+        // Two legitimate retrievals exceed the conservative catalog read budget.
+        for _ in 0..2 {
+            h.submit(FetchCommand::Lookup {
+                instance_id: "fixture".into(),
+                request: serde_json::from_value(json!({"identifier": {
+                    "namespace": "sec:cik", "value": "0000320193"
+                }}))
+                .unwrap(),
+            })
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        }
+        std::fs::remove_file(h.barrier.join("first")).unwrap();
+        let job = h
+            .submit(FetchCommand::Resolve {
+                instance_id: "fixture".into(),
+                input: "$AAPL".into(),
+            })
+            .unwrap();
+        barrier(&h.barrier, "first").await;
+        if cancel {
+            job.cancel();
+        }
+        let result = job.wait().await.unwrap();
+        if expected != ErrorKind::RateLimited {
+            reaped(&h.barrier);
+        }
+        h.worker.shutdown().await.unwrap();
+        let error = result.error.unwrap();
+        assert_eq!(error.kind, expected);
+        if expected == ErrorKind::RateLimited {
+            assert_eq!(error.retry_after_seconds, Some(3));
+        }
+        assert_eq!(result.provenance.runs.len(), 1);
+        let connection = rusqlite::Connection::open(&h.db).unwrap();
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM resolution_runs WHERE id=?1",
+                [result.provenance.runs[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "failed");
+    }
+}

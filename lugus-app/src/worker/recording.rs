@@ -32,6 +32,7 @@ pub(super) struct Recording<'a> {
     pub read_limited: Cell<bool>,
     pub finalization_failed: Cell<bool>,
     pub protocol_failed: bool,
+    pub resolution_failure: Option<crate::AppError>,
 }
 impl Repository for Recording<'_> {
     fn start_run(
@@ -146,6 +147,11 @@ impl CatalogRepository for Recording<'_> {
     }
     fn fail_resolution_run_with_error(&mut self, run: i64, error: &Error) -> Result<()> {
         self.protocol_failed |= error.kind == lugus_financial::error::ErrorKind::Protocol;
+        self.resolution_failure = Some(crate::AppError::from(Error {
+            kind: error.kind,
+            message: String::new(),
+            retry_after_seconds: error.retry_after_seconds,
+        }));
         let result = self.inner.fail_resolution_run_with_error(run, error);
         self.finalization_failed.set(result.is_err());
         result

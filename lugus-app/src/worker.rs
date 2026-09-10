@@ -488,6 +488,7 @@ async fn execute_job(
         read_limited: std::cell::Cell::new(false),
         finalization_failed: std::cell::Cell::new(false),
         protocol_failed: false,
+        resolution_failure: None,
     };
     let mut bounded = BoundedProvider {
         inner: provider,
@@ -516,6 +517,8 @@ async fn execute_job(
         Err(error) if error.kind == lugus_financial::error::ErrorKind::Persistence => {
             Some(AppError::from(error))
         }
+        Err(_) if bounded.budget.cause.is_some() => bounded.budget.cause.take(),
+        Err(_) if recording.resolution_failure.is_some() => recording.resolution_failure.take(),
         Err(_) if recording.read_limited.get() => Some(AppError::new(
             ErrorKind::ResourceLimit,
             "resolution evidence exceeds read budget",
