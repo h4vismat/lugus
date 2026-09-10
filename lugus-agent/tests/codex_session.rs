@@ -11,6 +11,7 @@ use lugus_agent::{
 };
 use tempfile::TempDir;
 use tokio::sync::{mpsc, watch};
+use tokio::time::timeout;
 
 struct FakeExecutable {
     _directory: TempDir,
@@ -44,6 +45,27 @@ impl FakeExecutable {
 #[derive(Default)]
 struct RecallExecutor {
     calls: Mutex<Vec<ToolCall>>,
+}
+
+struct PendingExecutor;
+
+#[async_trait::async_trait]
+impl ToolExecutor for PendingExecutor {
+    async fn execute(&self, _call: ToolCall) -> ToolResult {
+        std::future::pending().await
+    }
+}
+
+struct OversizedExecutor;
+
+#[async_trait::async_trait]
+impl ToolExecutor for OversizedExecutor {
+    async fn execute(&self, _call: ToolCall) -> ToolResult {
+        ToolResult {
+            success: true,
+            content: "this result is deliberately too large".into(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -293,4 +315,246 @@ async fn bounds_codex_version_output() {
         .unwrap_err();
 
     assert!(matches!(error, Error::Process(message) if message.contains("version output")));
+}
+
+#[tokio::test]
+async fn cancellation_before_startup_returns_a_cancelled_report() {
+    let executable = FakeExecutable::for_scenario("interruptible");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let (events, _received) = mpsc::channel(1);
+    let (cancel_tx, cancel) = watch::channel(true);
+
+    let report = runtime
+        .run(
+            request("run-cancel-before-start"),
+            &RecallExecutor::default(),
+            events,
+            cancel,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, RunOutcome::Cancelled);
+    drop(cancel_tx);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_an_active_turn_and_reaps_the_process() {
+    let executable = FakeExecutable::for_scenario("interruptible");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let (events, mut received) = mpsc::channel(4);
+    let (cancel_tx, cancel) = watch::channel(false);
+    let executor = RecallExecutor::default();
+    let report = {
+        let run = runtime.run(request("run-cancel-active"), &executor, events, cancel);
+        tokio::pin!(run);
+
+        tokio::select! {
+            event = received.recv() => assert!(matches!(event, Some(RuntimeEvent::Started { .. }))),
+            result = &mut run => panic!("run ended before Started: {result:?}"),
+        }
+        cancel_tx.send(true).unwrap();
+        timeout(Duration::from_millis(500), &mut run)
+            .await
+            .expect("cancellation must not wait for the run deadline")
+            .unwrap()
+    };
+
+    assert_eq!(report.outcome, RunOutcome::Cancelled);
+    runtime.close().await.unwrap();
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_remains_responsive_while_a_tool_executor_is_pending() {
+    let executable = FakeExecutable::for_scenario("pending_tool");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let (events, mut received) = mpsc::channel(4);
+    let (cancel_tx, cancel) = watch::channel(false);
+    let report = {
+        let run = runtime.run(request("run-cancel-tool"), &PendingExecutor, events, cancel);
+        tokio::pin!(run);
+
+        tokio::select! {
+            event = received.recv() => assert!(matches!(event, Some(RuntimeEvent::Started { .. }))),
+            result = &mut run => panic!("run ended before Started: {result:?}"),
+        }
+        tokio::select! {
+            event = received.recv() => assert!(matches!(event, Some(RuntimeEvent::ToolStarted { .. }))),
+            result = &mut run => panic!("run ended before ToolStarted: {result:?}"),
+        }
+        cancel_tx.send(true).unwrap();
+        timeout(Duration::from_millis(500), &mut run)
+            .await
+            .expect("cancellation must interrupt a pending host tool")
+            .unwrap()
+    };
+
+    assert_eq!(report.outcome, RunOutcome::Cancelled);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn refuses_to_start_when_inherited_mcp_configuration_cannot_be_parsed() {
+    let executable = FakeExecutable::for_scenario("malformed_config");
+    let error = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Configuration(message) if message.contains("mcp_servers")));
+}
+
+#[tokio::test]
+async fn approval_requests_are_cancelled_and_report_needs_attention() {
+    let executable = FakeExecutable::for_scenario("approval");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+
+    let (result, _) = run(
+        &mut runtime,
+        request("run-approval"),
+        &RecallExecutor::default(),
+    )
+    .await;
+    assert!(matches!(result, Err(Error::NeedsAttention(message)) if message.contains("approval")));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn human_input_requests_fail_with_needs_attention() {
+    let executable = FakeExecutable::for_scenario("human_input");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+
+    let (result, _) = run(
+        &mut runtime,
+        request("run-human-input"),
+        &RecallExecutor::default(),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(Error::NeedsAttention(message)) if message.contains("human input"))
+    );
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn tool_call_exhaustion_returns_a_typed_error_without_starting_the_excess_call() {
+    let executable = FakeExecutable::for_scenario("tool_limit");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+
+    let (result, events) = run(
+        &mut runtime,
+        request("run-tool-limit"),
+        &RecallExecutor::default(),
+    )
+    .await;
+    assert!(matches!(result, Err(Error::Tool(message)) if message.contains("limit")));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolStarted { .. }))
+            .count(),
+        1,
+    );
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn closed_event_consumers_fail_explicitly() {
+    let executable = FakeExecutable::for_scenario("interruptible");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let (events, received) = mpsc::channel(1);
+    drop(received);
+    let (_cancel_tx, cancel) = watch::channel(false);
+
+    let result = runtime
+        .run(
+            request("run-closed-events"),
+            &RecallExecutor::default(),
+            events,
+            cancel,
+        )
+        .await;
+    assert!(matches!(result, Err(Error::EventConsumerDisconnected)));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn slow_event_consumers_are_bounded() {
+    let executable = FakeExecutable::for_scenario("multiple_messages");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let (events, _received) = mpsc::channel(1);
+    let (_cancel_tx, cancel) = watch::channel(false);
+
+    let result = runtime
+        .run(
+            request("run-slow-events"),
+            &RecallExecutor::default(),
+            events,
+            cancel,
+        )
+        .await;
+    assert!(matches!(result, Err(Error::EventConsumerSlow)));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn exhausted_run_time_returns_timeout_and_reaps_the_process() {
+    let executable = FakeExecutable::for_scenario("interruptible");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let mut timed_request = request("run-timeout");
+    timed_request.limits.timeout = Duration::from_millis(30);
+
+    let (result, _) = run(&mut runtime, timed_request, &RecallExecutor::default()).await;
+    assert!(matches!(result, Err(Error::Timeout)));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn oversized_tool_results_are_replaced_with_a_bounded_failure() {
+    let executable = FakeExecutable::for_scenario("oversized_result");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let mut bounded_request = request("run-oversized-result");
+    bounded_request.limits.max_tool_result_bytes = 5;
+
+    let (report, _) = run(&mut runtime, bounded_request, &OversizedExecutor).await;
+    assert_eq!(report.unwrap().outcome, RunOutcome::Completed);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn process_death_during_a_turn_is_reported_explicitly() {
+    let executable = FakeExecutable::for_scenario("process_death");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+
+    let (result, _) = run(
+        &mut runtime,
+        request("run-process-death"),
+        &RecallExecutor::default(),
+    )
+    .await;
+    assert!(matches!(result, Err(Error::UnexpectedEof)));
+    runtime.close().await.unwrap();
 }

@@ -93,6 +93,17 @@ def serve_session():
                 rpc_result(message, {"account": {"type": "apiKey"}, "requiresOpenaiAuth": True})
             continue
 
+        if message.get("method") == "config/read":
+            validate_client_request(message, next_id, "config/read")
+            next_id += 1
+            if message.get("params") != {"cwd": os.getcwd(), "includeLayers": False}:
+                sys.exit(1)
+            config = {"mcp_servers": {"inherited": {"command": "unused"}}}
+            if scenario == "malformed_config":
+                config = {"mcp_servers": []}
+            rpc_result(message, {"config": config, "origins": {}})
+            continue
+
         validate_client_request(message, next_id, "thread/start")
         next_id += 1
         if scenario == "rpc_error":
@@ -112,7 +123,17 @@ def serve_session():
                 "required": ["thesis_id"], "additionalProperties": False,
             },
         }
-        if params.get("cwd") != os.getcwd() or params.get("baseInstructions") != "You are the Lugus review agent." or params.get("developerInstructions") != "Use only the supplied thesis context." or tools != [expected_tool]:
+        expected_config = {
+            "features": {"shell_tool": False, "hooks": False, "apps": False, "plugins": False,
+                         "browser_use": False, "computer_use": False, "image_generation": False,
+                         "view_image": False, "multi_agent": False, "goals": False, "sleep_tool": False,
+                         "tool_suggest": False, "skill_search": False, "request_permissions_tool": False},
+            "tools": {"experimental_request_user_input": {"enabled": False}, "update_plan": {"enabled": False}},
+            "skills": {"include_instructions": False, "bundled": {"enabled": False}},
+            "project_doc_max_bytes": 0, "developer_instructions": "", "web_search": "live",
+            "mcp_servers": {"inherited": {"enabled": False}},
+        }
+        if params.get("cwd") != os.getcwd() or params.get("baseInstructions") != "You are the Lugus review agent." or params.get("developerInstructions") != "Use only the supplied thesis context." or tools != [expected_tool] or params.get("approvalPolicy") != "never" or params.get("sandbox") != "read-only" or params.get("config") != expected_config:
             send({"id": message["id"], "error": {"code": -32602, "message": "invalid thread settings"}})
             continue
         if scenario == "normal" and (params.get("model") != "gpt-test" or params.get("modelProvider") != "test-provider"):
@@ -135,6 +156,30 @@ def serve_session():
             continue
         rpc_result(start, {"turn": turn(turn_id)})
 
+        if scenario == "interruptible":
+            interrupt = read_message()
+            if interrupt != {"id": 8, "method": "turn/interrupt", "params": {"threadId": thread_id, "turnId": turn_id}}:
+                sys.exit(1)
+            rpc_result(interrupt, {})
+            send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "interrupted", [])}})
+            continue
+
+        if scenario == "approval":
+            send({"id": "approval-1", "method": "item/commandExecution/requestApproval", "params": {}})
+            if read_message() != {"id": "approval-1", "result": {"decision": "cancel"}}:
+                sys.exit(1)
+            continue
+
+        if scenario == "human_input":
+            send({"id": "input-1", "method": "item/tool/requestUserInput", "params": {}})
+            response = read_message()
+            if response.get("id") != "input-1" or response.get("error", {}).get("code") != -32601:
+                sys.exit(1)
+            continue
+
+        if scenario == "process_death":
+            sys.exit(0)
+
         tool_name = "missing_tool" if scenario == "unknown_tool" else "lugus_recall"
         namespace = "foreign" if scenario == "namespaced_tool" else None
         call_thread = "thread-other" if scenario == "wrong_thread" else thread_id
@@ -147,11 +192,13 @@ def serve_session():
         if scenario == "wrong_thread":
             continue
         tool_response = read_message()
-        success = scenario not in {"unknown_tool", "namespaced_tool"}
+        success = scenario not in {"unknown_tool", "namespaced_tool", "oversized_result"}
         if scenario == "unknown_tool":
             expected_content = "unknown tool: missing_tool"
         elif scenario == "namespaced_tool":
             expected_content = "unknown tool: foreign/lugus_recall"
+        elif scenario == "oversized_result":
+            expected_content = "tool "
         else:
             expected_content = "Stored finding from thesis A"
         expected_response = {
@@ -160,6 +207,17 @@ def serve_session():
         }
         if tool_response != expected_response:
             sys.exit(1)
+
+        if scenario == "tool_limit":
+            send({
+                "id": f"server-limit-{thread_index}", "method": "item/tool/call",
+                "params": {"arguments": {"thesis_id": "thesis-A"}, "callId": "call-2",
+                           "threadId": thread_id, "tool": "lugus_recall", "turnId": turn_id},
+            })
+            response = read_message()
+            if response.get("id") != f"server-limit-{thread_index}" or response.get("result", {}).get("success") is not False:
+                sys.exit(1)
+            continue
 
         if scenario == "multiple_messages":
             send({"method": "item/agentMessage/delta", "params": {

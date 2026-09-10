@@ -30,6 +30,9 @@ pub(crate) enum ResponseOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RequestMethod {
     DynamicToolCall,
+    Approval,
+    HumanInput,
+    McpElicitation,
     Unknown(String),
 }
 
@@ -56,6 +59,12 @@ pub(crate) fn classify_message(value: Value) -> Result<WireMessage> {
                     validate_dynamic_tool_call(params)?;
                     RequestMethod::DynamicToolCall
                 }
+                "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                    RequestMethod::Approval
+                }
+                "item/permissions/requestApproval" => RequestMethod::HumanInput,
+                "item/tool/requestUserInput" => RequestMethod::HumanInput,
+                "mcpServer/elicitation/request" => RequestMethod::McpElicitation,
                 _ => RequestMethod::Unknown(method.clone()),
             };
             Ok(WireMessage::Request {

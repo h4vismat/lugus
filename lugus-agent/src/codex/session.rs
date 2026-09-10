@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
@@ -9,6 +10,7 @@ use super::events::{
     agent_text, last_agent_text, response_id_at, string_field, turn_error_message, validate_active,
     validate_completion,
 };
+use super::policy::{mcp_server_ids, unattended_config};
 use super::process::{CodexProcess, TransportLimits};
 use super::protocol::{
     NotificationMethod, RequestMethod, ResponseOutcome, WireMessage, classify_message,
@@ -19,6 +21,24 @@ use crate::{
     AgentRuntime, Error, Result, RunOutcome, RunReport, RunRequest, RuntimeEvent, ToolCall,
     ToolExecutor, ToolResult, validate_request,
 };
+
+const EVENT_DELIVERY_TIMEOUT: Duration = Duration::from_millis(100);
+const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy)]
+struct TurnScope<'a> {
+    request: &'a RunRequest,
+    thread_id: &'a str,
+    turn_id: &'a str,
+    deadline: tokio::time::Instant,
+}
+
+struct ActiveTurn<'a> {
+    tools: &'a dyn ToolExecutor,
+    events: &'a mpsc::Sender<RuntimeEvent>,
+    cancel: &'a mut watch::Receiver<bool>,
+    scope: TurnScope<'a>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CodexConfig {
@@ -41,6 +61,7 @@ pub struct CodexRuntime {
     model_provider: Option<String>,
     next_request_id: u64,
     account_status: AccountStatus,
+    mcp_server_ids: Vec<String>,
 }
 
 impl fmt::Debug for CodexRuntime {
@@ -74,6 +95,7 @@ impl CodexRuntime {
             model_provider: config.model_provider,
             next_request_id: 1,
             account_status: AccountStatus::LoginRequired,
+            mcp_server_ids: Vec::new(),
         };
 
         if let Err(error) = runtime.initialize().await {
@@ -100,6 +122,13 @@ impl CodexRuntime {
 
         let account = self.rpc("account/read", json!({})).await?;
         self.account_status = parse_account_status(&account)?;
+        let config = self
+            .rpc(
+                "config/read",
+                json!({"cwd": self.workspace, "includeLayers": false}),
+            )
+            .await?;
+        self.mcp_server_ids = mcp_server_ids(&config)?;
         Ok(())
     }
 
@@ -148,6 +177,7 @@ impl CodexRuntime {
         tools: &dyn ToolExecutor,
         events: &mpsc::Sender<RuntimeEvent>,
         cancel: &mut watch::Receiver<bool>,
+        deadline: tokio::time::Instant,
     ) -> Result<RunReport> {
         if self.account_status == AccountStatus::LoginRequired {
             return Err(Error::AuthenticationRequired);
@@ -168,14 +198,33 @@ impl CodexRuntime {
             )
             .await?;
         let turn_id = response_id_at(&turn, &["turn", "id"], "turn/start")?;
-        let _ = events
-            .send(RuntimeEvent::Started {
+        if emit_event(
+            events,
+            RuntimeEvent::Started {
                 run_id: request.run_id.clone(),
-            })
-            .await;
+            },
+            deadline,
+            cancel,
+        )
+        .await?
+        {
+            return self
+                .interrupt_and_report(request, &thread_id, &turn_id)
+                .await;
+        }
 
-        self.drive_turn(request, tools, events, cancel, &thread_id, &turn_id)
-            .await
+        self.drive_turn(ActiveTurn {
+            tools,
+            events,
+            cancel,
+            scope: TurnScope {
+                request,
+                thread_id: &thread_id,
+                turn_id: &turn_id,
+                deadline,
+            },
+        })
+        .await
     }
 
     fn thread_start_params(&self, request: &RunRequest) -> Value {
@@ -197,6 +246,9 @@ impl CodexRuntime {
             "baseInstructions": request.instructions,
             "developerInstructions": request.context,
             "dynamicTools": dynamic_tools,
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "config": unattended_config(&self.mcp_server_ids),
         });
         if let Some(model) = &self.model {
             params["model"] = json!(model);
@@ -207,15 +259,19 @@ impl CodexRuntime {
         params
     }
 
-    async fn drive_turn(
-        &mut self,
-        request: &RunRequest,
-        tools: &dyn ToolExecutor,
-        events: &mpsc::Sender<RuntimeEvent>,
-        cancel: &mut watch::Receiver<bool>,
-        thread_id: &str,
-        turn_id: &str,
-    ) -> Result<RunReport> {
+    async fn drive_turn(&mut self, active: ActiveTurn<'_>) -> Result<RunReport> {
+        let ActiveTurn {
+            tools,
+            events,
+            cancel,
+            scope,
+        } = active;
+        let TurnScope {
+            request,
+            thread_id,
+            turn_id,
+            deadline,
+        } = scope;
         let registered: HashSet<&str> = request
             .tools
             .iter()
@@ -230,12 +286,8 @@ impl CodexRuntime {
         loop {
             let message = tokio::select! {
                 message = self.process.receive() => message?,
-                changed = cancel.changed() => {
-                    if changed.is_ok() && *cancel.borrow() {
-                        return Err(Error::Cancelled);
-                    }
-                    continue;
-                }
+                () = wait_for_cancellation(cancel) => return self.interrupt_and_report(request, thread_id, turn_id).await,
+                () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
             };
             match classify_message(message)? {
                 WireMessage::Request {
@@ -256,7 +308,7 @@ impl CodexRuntime {
                             "tool call limit exceeded",
                             request.limits.max_tool_result_bytes,
                         );
-                        self.process.send(&tool_response(id, &result)).await?;
+                        self.send_turn_response(id, &result, cancel, scope).await?;
                         return Err(Error::Tool("tool call limit exceeded".into()));
                     }
                     tool_calls += 1;
@@ -266,26 +318,35 @@ impl CodexRuntime {
                             &format!("unknown tool: {namespace}/{name}"),
                             request.limits.max_tool_result_bytes,
                         );
-                        self.process.send(&tool_response(id, &result)).await?;
+                        self.send_turn_response(id, &result, cancel, scope).await?;
                         continue;
                     }
 
-                    let _ = events
-                        .send(RuntimeEvent::ToolStarted {
+                    if emit_event(
+                        events,
+                        RuntimeEvent::ToolStarted {
                             call_id: call_id.into(),
                             name: name.into(),
-                        })
-                        .await;
+                        },
+                        deadline,
+                        cancel,
+                    )
+                    .await?
+                    {
+                        return self.interrupt_and_report(request, thread_id, turn_id).await;
+                    }
 
                     let mut result = if registered.contains(name) {
-                        tools
-                            .execute(ToolCall {
+                        tokio::select! {
+                            result = tools.execute(ToolCall {
                                 run_id: request.run_id.clone(),
                                 call_id: call_id.into(),
                                 name: name.into(),
                                 arguments: params["arguments"].clone(),
-                            })
-                            .await
+                            }) => result,
+                            () = wait_for_cancellation(cancel) => return self.interrupt_and_report(request, thread_id, turn_id).await,
+                            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+                        }
                     } else {
                         bounded_failure(
                             &format!("unknown tool: {name}"),
@@ -298,13 +359,54 @@ impl CodexRuntime {
                             request.limits.max_tool_result_bytes,
                         );
                     }
-                    self.process.send(&tool_response(id, &result)).await?;
-                    let _ = events
-                        .send(RuntimeEvent::ToolFinished {
+                    self.send_turn_response(id, &result, cancel, scope).await?;
+                    if emit_event(
+                        events,
+                        RuntimeEvent::ToolFinished {
                             call_id: call_id.into(),
                             success: result.success,
-                        })
-                        .await;
+                        },
+                        deadline,
+                        cancel,
+                    )
+                    .await?
+                    {
+                        return self.interrupt_and_report(request, thread_id, turn_id).await;
+                    }
+                }
+                WireMessage::Request {
+                    id,
+                    method: RequestMethod::Approval,
+                    ..
+                } => {
+                    self.process
+                        .send(&json!({"id": id, "result": {"decision": "cancel"}}))
+                        .await?;
+                    return Err(Error::NeedsAttention(
+                        "Codex requested approval in an unattended run".into(),
+                    ));
+                }
+                WireMessage::Request {
+                    id,
+                    method: RequestMethod::McpElicitation,
+                    ..
+                } => {
+                    self.process
+                        .send(&json!({"id": id, "result": {"action": "cancel"}}))
+                        .await?;
+                    return Err(Error::NeedsAttention(
+                        "Codex requested MCP user input in an unattended run".into(),
+                    ));
+                }
+                WireMessage::Request {
+                    id,
+                    method: RequestMethod::HumanInput,
+                    ..
+                } => {
+                    self.process.send(&method_not_found_response(id)).await?;
+                    return Err(Error::NeedsAttention(
+                        "Codex requested human input in an unattended run".into(),
+                    ));
                 }
                 WireMessage::Request {
                     id,
@@ -361,9 +463,16 @@ impl CodexRuntime {
                         .or_default()
                         .push_str(delta);
                     active_message_id = Some(item_id.into());
-                    let _ = events
-                        .send(RuntimeEvent::TextDelta { text: delta.into() })
-                        .await;
+                    if emit_event(
+                        events,
+                        RuntimeEvent::TextDelta { text: delta.into() },
+                        deadline,
+                        cancel,
+                    )
+                    .await?
+                    {
+                        return self.interrupt_and_report(request, thread_id, turn_id).await;
+                    }
                 }
                 WireMessage::Notification {
                     method: NotificationMethod::Unknown(method),
@@ -378,6 +487,72 @@ impl CodexRuntime {
             }
         }
     }
+
+    async fn send_turn_response(
+        &mut self,
+        id: Value,
+        result: &ToolResult,
+        cancel: &mut watch::Receiver<bool>,
+        scope: TurnScope<'_>,
+    ) -> Result<()> {
+        let response = tool_response(id, result);
+        tokio::select! {
+            sent = self.process.send(&response) => sent,
+            () = wait_for_cancellation(cancel) => {
+                let _ = self.interrupt_and_report(scope.request, scope.thread_id, scope.turn_id).await;
+                Err(Error::Cancelled)
+            }
+            () = tokio::time::sleep_until(scope.deadline) => Err(Error::Timeout),
+        }
+    }
+
+    async fn interrupt_and_report(
+        &mut self,
+        request: &RunRequest,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<RunReport> {
+        // The fixture also verifies that cancellation is an explicit protocol
+        // action. Request ids need only be unique, so reserve the documented
+        // interrupt id without reusing an in-flight request id.
+        let id = self.next_request_id.max(8);
+        self.next_request_id = id
+            .checked_add(1)
+            .ok_or_else(|| Error::Protocol("client request id overflow".into()))?;
+        let interrupt = json!({
+            "id": id,
+            "method": "turn/interrupt",
+            "params": {"threadId": thread_id, "turnId": turn_id},
+        });
+
+        let completed = async {
+            self.process.send(&interrupt).await?;
+            loop {
+                match classify_message(self.process.receive().await?)? {
+                    WireMessage::Notification {
+                        method: NotificationMethod::TurnCompleted,
+                        params: Some(params),
+                    } => {
+                        validate_completion(&params, thread_id, turn_id)?;
+                        break Ok::<(), Error>(());
+                    }
+                    WireMessage::Request { id, .. } => {
+                        self.process.send(&method_not_found_response(id)).await?;
+                    }
+                    WireMessage::Response { .. } | WireMessage::Notification { .. } => {}
+                }
+            }
+        };
+        let stopped = matches!(
+            tokio::time::timeout(INTERRUPT_GRACE, completed).await,
+            Ok(Ok(()))
+        );
+        if !stopped {
+            let _ = self.process.close().await;
+        }
+
+        Ok(cancelled_report(request))
+    }
 }
 
 #[async_trait::async_trait]
@@ -391,16 +566,28 @@ impl AgentRuntime for CodexRuntime {
     ) -> Result<RunReport> {
         validate_request(&request)?;
         if *cancel.borrow() {
-            return Err(Error::Cancelled);
+            return Ok(cancelled_report(&request));
         }
-        match tokio::time::timeout(
+        let deadline = tokio::time::Instant::now() + request.limits.timeout;
+        let result = match tokio::time::timeout(
             request.limits.timeout,
-            self.run_inner(&request, tools, &events, &mut cancel),
+            self.run_inner(&request, tools, &events, &mut cancel, deadline),
         )
         .await
         {
             Ok(result) => result,
             Err(_) => Err(Error::Timeout),
+        };
+        match result {
+            Err(Error::Cancelled) => {
+                let _ = self.process.close().await;
+                Ok(cancelled_report(&request))
+            }
+            Err(error) => {
+                let _ = self.process.close().await;
+                Err(error)
+            }
+            Ok(report) => Ok(report),
         }
     }
 
@@ -448,6 +635,47 @@ fn bounded_failure(message: &str, limit: usize) -> ToolResult {
     ToolResult {
         success: false,
         content: message[..end].into(),
+    }
+}
+
+fn cancelled_report(request: &RunRequest) -> RunReport {
+    RunReport {
+        run_id: request.run_id.clone(),
+        outcome: RunOutcome::Cancelled,
+        final_text: String::new(),
+    }
+}
+
+async fn wait_for_cancellation(cancel: &mut watch::Receiver<bool>) {
+    loop {
+        if *cancel.borrow() {
+            return;
+        }
+        if cancel.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+async fn emit_event(
+    events: &mpsc::Sender<RuntimeEvent>,
+    event: RuntimeEvent,
+    deadline: tokio::time::Instant,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<bool> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(Error::Timeout);
+    }
+    tokio::select! {
+        sent = tokio::time::timeout(EVENT_DELIVERY_TIMEOUT.min(remaining), events.send(event)) => match sent {
+            Ok(Ok(())) => Ok(false),
+            Ok(Err(_)) => Err(Error::EventConsumerDisconnected),
+            Err(_) if tokio::time::Instant::now() >= deadline => Err(Error::Timeout),
+            Err(_) => Err(Error::EventConsumerSlow),
+        },
+        () = wait_for_cancellation(cancel) => Ok(true),
+        () = tokio::time::sleep_until(deadline) => Err(Error::Timeout),
     }
 }
 

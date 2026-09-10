@@ -26,6 +26,10 @@ pub enum Error {
     Cancelled,
     #[error("runtime needs attention: {0}")]
     NeedsAttention(String),
+    #[error("runtime event consumer disconnected")]
+    EventConsumerDisconnected,
+    #[error("runtime event consumer did not accept an event in time")]
+    EventConsumerSlow,
     #[error("tool error: {0}")]
     Tool(String),
 }
