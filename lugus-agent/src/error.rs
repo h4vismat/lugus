@@ -12,6 +12,14 @@ pub enum Error {
     Timeout,
     #[error("process error: {0}")]
     Process(String),
+    #[error("process frame exceeds the {limit}-byte limit")]
+    FrameTooLarge { limit: usize },
+    #[error("process output ended before a complete frame")]
+    UnexpectedEof,
+    #[error("process output contains invalid UTF-8")]
+    InvalidUtf8,
+    #[error("process output contains malformed JSON: {0}")]
+    MalformedJson(String),
     #[error("authentication is required")]
     AuthenticationRequired,
     #[error("runtime was cancelled")]
