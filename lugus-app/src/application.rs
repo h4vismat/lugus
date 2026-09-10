@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 
 /// A fresh 256-bit OS-random namespace plus a non-wrapping monotonic counter.
 /// Construction fails closed if the OS cannot provide entropy.
@@ -108,10 +108,11 @@ struct Admission {
     workers: BTreeMap<String, WorkerHandle>,
     jobs: BTreeMap<String, RegisteredJob>,
     terminals: VecDeque<String>,
+    shutdown: Option<watch::Receiver<Option<Result<()>>>>,
 }
 struct ProviderControl {
     factory: Arc<dyn ProviderFactory>,
-    lifecycle: tokio::sync::Mutex<()>,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
 }
 struct Inner {
     catalog: Arc<Mutex<Catalog>>,
@@ -181,6 +182,7 @@ impl Application {
                     workers: BTreeMap::new(),
                     jobs: BTreeMap::new(),
                     terminals: VecDeque::new(),
+                    shutdown: None,
                 }),
                 providers: providers
                     .into_iter()
@@ -189,7 +191,7 @@ impl Application {
                             p.factory.identity().instance_id,
                             ProviderControl {
                                 factory: p.factory,
-                                lifecycle: tokio::sync::Mutex::new(()),
+                                lifecycle: Arc::new(tokio::sync::Mutex::new(())),
                             },
                         )
                     })
@@ -203,12 +205,30 @@ impl Application {
                 events,
             }),
         };
-        let mut starts = tokio::task::JoinSet::new();
-        for id in active {
-            let app = app.clone();
-            starts.spawn(async move { app.activate(&id).await });
-        }
-        while starts.join_next().await.is_some() {}
+        // Construction may itself be dropped. Keep startup and orphan cleanup owned until
+        // either the caller receives the host or every admitted provider has been reaped.
+        let (sender, receiver) = oneshot::channel();
+        let (accepted, acceptance) = oneshot::channel();
+        tokio::spawn(async move {
+            let mut starts = tokio::task::JoinSet::new();
+            for id in active {
+                let app = app.clone();
+                starts.spawn(async move { app.activate(&id).await });
+            }
+            while starts.join_next().await.is_some() {}
+            if sender.send(app.clone()).is_err() || acceptance.await.is_err() {
+                let _ = app.shutdown().await;
+            }
+        });
+        let app = receiver.await.map_err(|_| {
+            error(
+                ErrorKind::Unavailable,
+                "application startup supervision stopped",
+            )
+        })?;
+        // A delivered value can still be dropped inside an unpolled receiver. Only this
+        // acknowledgment transfers lifecycle responsibility to the returned host.
+        let _ = accepted.send(());
         Ok(app)
     }
     fn output<T: serde::Serialize>(&self, value: T) -> Result<T> {
@@ -243,14 +263,46 @@ impl Application {
         self.inner.events.subscribe()
     }
     pub async fn activate(&self, id: &str) -> Result<()> {
+        self.lifecycle(id, true).await
+    }
+    pub async fn deactivate(&self, id: &str) -> Result<()> {
+        self.lifecycle(id, false).await
+    }
+    async fn lifecycle(&self, id: &str, activate: bool) -> Result<()> {
         let control = self
             .inner
             .providers
             .get(id)
             .ok_or_else(|| error(ErrorKind::Unavailable, "provider is not configured"))?;
-        let _lifecycle = control.lifecycle.lock().await;
+        // Waiting callers own no task/effects. Only one admitted task per provider can
+        // exist, and its owned permit survives cancellation of the caller's wait.
+        let permit = control.lifecycle.clone().lock_owned().await;
+        let app = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            let _permit = permit;
+            if activate {
+                app.activate_owned(&id).await
+            } else {
+                app.deactivate_owned(&id).await
+            }
+        })
+        .await
+        .map_err(|_| {
+            error(
+                ErrorKind::Unavailable,
+                "provider lifecycle supervision stopped",
+            )
+        })?
+    }
+    async fn activate_owned(&self, id: &str) -> Result<()> {
+        let control = self
+            .inner
+            .providers
+            .get(id)
+            .ok_or_else(|| error(ErrorKind::Unavailable, "provider is not configured"))?;
         let old = {
-            let mut state = lock(&self.inner.admission)?;
+            let state = lock(&self.inner.admission)?;
             if state.closed {
                 return Err(error(
                     ErrorKind::Unavailable,
@@ -263,10 +315,11 @@ impl Application {
             for job in state.jobs.values().filter(|j| j.instance_id == id) {
                 job.cancellation.cancel();
             }
-            state.workers.remove(id)
+            state.workers.get(id).cloned()
         };
         if let Some(old) = old {
             old.shutdown().await?;
+            lock(&self.inner.admission)?.workers.remove(id);
         }
         {
             let state = lock(&self.inner.admission)?;
@@ -290,6 +343,9 @@ impl Application {
             let mut state = lock(&self.inner.admission)?;
             if state.closed {
                 lock(&self.inner.catalog)?.deactivate(id)?;
+                // Retain the handle while cleanup runs, including its terminal error if
+                // close fails. Shutdown waits this lifecycle permit and observes that error.
+                state.workers.insert(id.into(), worker.clone());
                 false
             } else {
                 state.workers.insert(id.into(), worker.clone());
@@ -298,6 +354,7 @@ impl Application {
         };
         if !publish {
             worker.shutdown().await?;
+            lock(&self.inner.admission)?.workers.remove(id);
             return Err(error(
                 ErrorKind::Unavailable,
                 "application is shutting down",
@@ -305,24 +362,19 @@ impl Application {
         }
         Ok(())
     }
-    pub async fn deactivate(&self, id: &str) -> Result<()> {
-        let control = self
-            .inner
-            .providers
-            .get(id)
-            .ok_or_else(|| error(ErrorKind::Unavailable, "provider is not configured"))?;
-        let _lifecycle = control.lifecycle.lock().await;
+    async fn deactivate_owned(&self, id: &str) -> Result<()> {
         let worker = {
-            let mut state = lock(&self.inner.admission)?;
+            let state = lock(&self.inner.admission)?;
             let mut catalog = lock(&self.inner.catalog)?;
             catalog.deactivate(id)?;
             for job in state.jobs.values().filter(|j| j.instance_id == id) {
                 job.cancellation.cancel();
             }
-            state.workers.remove(id)
+            state.workers.get(id).cloned()
         };
         if let Some(worker) = worker {
             worker.shutdown().await?;
+            lock(&self.inner.admission)?.workers.remove(id);
         }
         Ok(())
     }
@@ -520,22 +572,49 @@ impl Application {
         Ok(())
     }
     pub async fn shutdown(&self) -> Result<()> {
-        let mut pending = {
+        let mut completion = {
             let mut state = lock(&self.inner.admission)?;
-            state.closed = true;
-            let mut catalog = lock(&self.inner.catalog)?;
-            for id in self.inner.providers.keys() {
-                catalog.deactivate(id)?;
+            if let Some(completion) = &state.shutdown {
+                completion.clone()
+            } else {
+                state.closed = true;
+                let mut catalog = lock(&self.inner.catalog)?;
+                for id in self.inner.providers.keys() {
+                    catalog.deactivate(id)?;
+                }
+                let pending = state
+                    .jobs
+                    .values()
+                    .map(|job| {
+                        job.cancellation.cancel();
+                        job.status.subscribe()
+                    })
+                    .collect();
+                let (sender, completion) = watch::channel(None);
+                state.shutdown = Some(completion.clone());
+                let app = self.clone();
+                // A single host-owned shutdown task retains all stop and job completion
+                // waits, even if every caller drops its shutdown future.
+                tokio::spawn(async move {
+                    let result = app.shutdown_owned(pending).await;
+                    sender.send_replace(Some(result));
+                });
+                completion
             }
-            state
-                .jobs
-                .values()
-                .map(|j| {
-                    j.cancellation.cancel();
-                    j.status.subscribe()
-                })
-                .collect::<Vec<_>>()
         };
+        loop {
+            if let Some(result) = completion.borrow_and_update().clone() {
+                return result;
+            }
+            completion.changed().await.map_err(|_| {
+                error(
+                    ErrorKind::Unavailable,
+                    "application shutdown supervision stopped",
+                )
+            })?;
+        }
+    }
+    async fn shutdown_owned(&self, mut pending: Vec<watch::Receiver<JobStatus>>) -> Result<()> {
         let mut stops = tokio::task::JoinSet::new();
         for id in self.inner.providers.keys() {
             let app = self.clone();
