@@ -1,4 +1,5 @@
 //! SQLite evidence history. Each page and its continuation cursor commit together.
+pub mod selection;
 use crate::{
     domain::*,
     error::{Error, ErrorKind, Result},
@@ -87,7 +88,7 @@ pub struct ObservationRetrieval {
     pub retrieved_at: chrono::DateTime<Utc>,
 }
 pub struct SqliteRepository {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 fn invalid(message: &str) -> Error {
     Error::new(ErrorKind::InvalidRequest, message)
@@ -125,7 +126,7 @@ impl SqliteRepository {
                 transaction.execute_batch(include_str!("market-v2.sql"))?;
             }
             1 => transaction.execute_batch(include_str!("market-v2.sql"))?,
-            2 => {}
+            2..=4 => {}
             _ => {
                 return Err(Error::new(
                     ErrorKind::Persistence,
@@ -133,6 +134,12 @@ impl SqliteRepository {
                 ));
             }
         };
+        if version < 3 {
+            transaction.execute_batch(include_str!("catalog-v3.sql"))?;
+        }
+        if version < 4 {
+            transaction.execute_batch(include_str!("selection-v4.sql"))?;
+        }
         transaction.commit()?;
         Ok(Self { connection })
     }

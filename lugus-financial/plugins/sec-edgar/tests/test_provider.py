@@ -168,7 +168,7 @@ class TransportTests(unittest.TestCase):
         result=subprocess.run([sys.executable,str(directory/'main.py')],input='\n'.join(messages)+'\n',text=True,capture_output=True,timeout=5,check=True)
         responses=[json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(responses[0]['error']['code'],-32700)
-        self.assertEqual(responses[1]['result']['capabilities'],{'filings':1,'fundamentals':1})
+        self.assertEqual(responses[1]['result']['capabilities'],{'filings':1,'fundamentals':1,'company_resolution':1})
         self.assertEqual(result.stderr,'')
 
 class ConfigurationTests(unittest.TestCase):

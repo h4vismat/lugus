@@ -87,4 +87,100 @@ SEC Company Facts exposes standard-taxonomy, entity-wide facts rather than every
 
 One plugin instance throttles its own SEC requests. Multiple processes or other applications sharing network access must coordinate their aggregate request rate. [SEC fair-access guidance](https://www.sec.gov/about/developer-resources)
 
-Deferred: Alpha Vantage integration, ticker-to-company resolution, intraday data, background scheduling, agent tool integration, full statement assembly, and cross-provider reconciliation.
+Deferred: Alpha Vantage integration, automatic market-instrument binding, intraday data, background scheduling, agent tool integration, full statement assembly, and cross-provider reconciliation.
+
+## Company resolution and offline catalog
+
+The SEC plugin (`0.2.0`) now advertises `company_resolution:1`. The generic Rust
+`CompanyResolutionProvider` port also supports future plugins. Search returns sourced
+candidates; the host retains full provider identity, raw-source checksums, repeated
+retrievals, and stable local company IDs. It never joins entities by name or assumes
+an SEC ticker is a Yahoo instrument identifier.
+
+From the workspace root, with `LUGUS_SEC_USER_AGENT` configured as above:
+
+```sh
+cargo run -p lugus-financial --example company_resolve -- resolve ./financial.db ./lugus-financial/plugins/sec-edgar/plugin.json '$IBM'
+cargo run -p lugus-financial --example company_resolve -- resolve ./financial.db ./lugus-financial/plugins/sec-edgar/plugin.json '$PLTR'
+cargo run -p lugus-financial --example company_resolve -- lookup ./financial.db ./lugus-financial/plugins/sec-edgar/plugin.json 51143
+cargo run -p lugus-financial --example company_resolve -- query ./financial.db '$IBM'
+cargo run -p lugus-financial --example company_resolve -- history ./financial.db 1
+```
+
+Quote cashtags in a shell to prevent environment-variable expansion. `$IBM` is an
+explicit ticker search; bare `IBM` tries exact ticker first and falls back to name
+search only after a successfully exhausted empty result. Failures and partial
+searches do not trigger fallback. Exact CIK input also supports `sec:cik:51143`.
+The CLI records the provider instance as `sec-edgar:local`.
+
+`query`, `history`, `select`, and `selection` are offline. Use run and observation IDs
+from a candidate result to persist an explicit choice, then reopen its returned
+selection ID:
+
+```sh
+cargo run -p lugus-financial --example company_resolve -- select ./financial.db 1 1
+cargo run -p lugus-financial --example company_resolve -- selection ./financial.db 1
+```
+
+A choice validates run membership and freezes its source scope and run status;
+it does not rewrite an ambiguous or partial search as an automatically resolved run.
+ Name matches remain candidates. A unique exact
+identifier resolves only within its source scope and absent historical catalog
+conflicts. Search directory coverage is limited; direct CIK lookup can retrieve
+registrants absent from that directory. Catalog history retains source associations
+rather than asserting that omitted listings have ceased to exist.
+
+The public `resolution::application` functions coordinate bounded searches and
+persistence. `resolution::catalog::CatalogRepository` exposes offline results and
+history. See [company-resolution protocol](docs/protocol/company-resolution-v1.md).
+
+## Observation selection
+
+`selection::SelectionRepository` reads exact ingestion-run membership, preserving
+retrieval associations and persistent repository identity. Pure `select_daily` and
+`select_facts` functions produce versioned manifests and explicit conflicts.
+
+Default selection uses the latest initiated completed run whose requested scope
+contains the view query, from one full provider identity. New failed/running
+refreshes remain visible while the previous completed dataset is selected. Completed
+source responses may still have partial/unverified source coverage, which remains
+explicit. No chart combines price revisions from separate source snapshots.
+
+Fundamental selection groups the exact concept, unit, and reporting period, then
+selects the latest filed disclosure in each group. Numerically equivalent decimal
+strings retain all supporting references; differing values filed on the same date
+remain a conflict. Annual, quarterly, and year-to-date durations are not combined.
+No public-as-of guarantee, currency conversion, quarter derivation, or full statement
+assembly is introduced. Existing durable review evidence remains unchanged.
+
+Inspect a stored market dataset without fetching:
+
+```sh
+cargo run -p lugus-financial --example observation_select -- ./financial.db local yfinance 0.1.0 yahoo:symbol AAPL 2024-01-01 2024-12-31
+```
+
+Use the actual instance/plugin/version recorded by your ingestion. Inspect a reported
+instant metric from an existing SEC dataset:
+
+```sh
+cargo run -p lugus-financial --example fundamentals_select -- ./financial.db local sec-edgar 0.2.0 51143 us-gaap Assets USD 2023-01-01 2026-09-10 latest-instant
+```
+
+Other modes are `instants` and `durations`. The scope must be contained by a completed
+facts ingestion run. An empty response includes run diagnostics instead of silently
+shortening scope. Old SEC observations retain their original `0.1.0` identity;
+select that version explicitly when inspecting them.
+
+Financial schema upgrades now apply additive v3 catalog and v4 selection metadata.
+Existing observation payloads and fingerprints stay intact. New ingestion chronology
+is monotonic within the repository; migrated cross-capability timestamp ties receive
+a deterministic local order, not an inferred source-publication order.
+
+### Resolution/selection verification record
+
+On 2026-09-10, all 145 workspace/all-target Rust tests passed, as did
+strict workspace Clippy, formatting, 31 SEC Python tests and 12 yfinance Python tests.
+Independent review findings were fixed and re-reviewed. The company CLI resolve,
+lookup, offline query/history, explicit select, and reopened selection flows passed
+using a real synthetic provider process. Live SEC data retrieval was not exercised
+in this implementation verification.

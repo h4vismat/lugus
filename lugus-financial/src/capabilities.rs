@@ -21,3 +21,5 @@ pub trait MarketDataProvider: Provider + Send {
         query: &crate::market_data::PriceQuery,
     ) -> Result<crate::market_data::PricePage>;
 }
+
+pub use crate::resolution::CompanyResolutionProvider;

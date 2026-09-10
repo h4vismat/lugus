@@ -85,5 +85,7 @@ async fn real_sec_plugin_initializes_without_network() {
     .unwrap();
     assert_eq!(plugin.capabilities().get("fundamentals"), Some(&1));
     assert_eq!(plugin.capabilities().get("filings"), Some(&1));
+    assert_eq!(plugin.capabilities().get("company_resolution"), Some(&1));
+    assert_eq!(plugin.identity().plugin_version, "0.2.0");
     plugin.close().await.unwrap();
 }

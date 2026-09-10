@@ -1,6 +1,6 @@
 # Company resolution capability and local catalog
 
-Status: architectural direction approved in conversation; detailed specification proposed for review. Initial discovery covers SEC data. International discovery is added through plugins implementing the same capability. This document does not implement production code.
+Status: approved and implemented on branch `codex/company-resolution-observations`. Initial discovery covers SEC data; international discovery can use the same plugin capability. See the implementation plan and `lugus-financial/README.md` for verification and runnable examples.
 
 ## Boundaries
 
@@ -20,6 +20,10 @@ Implement a `CompanyResolutionProvider` port in `lugus-financial` with search an
 - Every imported record retains host-attached `ProviderIdentity`, source URL, source content checksum, provider retrieval timestamp, host recording timestamp, and resolution run ID. Null source effective dates remain unknown; retrieval time does not establish when a ticker became valid.
 
 Catalog IDs can be allocated through an injected ID generator, with a uniqueness constraint in persistence. External identifiers are looked up before allocating an ID. Exact CIK identity permits reusing an existing catalog entry; different CIKs never merge by name. If an incoming set of associations would join two existing catalog entries, return a conflict and preserve the incoming evidence without merging.
+
+## Input entry points
+
+Cashtags such as `$IBM` and `$PLTR` are explicit SEC ticker searches. Bare single-token input tries an exact ticker search first and falls back to name search only after a successfully exhausted no-match result. Multiword input uses name search. `sec:cik:51143` normalizes to an explicit CIK query. Preserve ticker punctuation; no Yahoo mapping is inferred.
 
 ## Capability operations
 

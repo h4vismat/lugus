@@ -1,6 +1,6 @@
 # Deterministic financial observation selection
 
-Status: proposed detailed rules for the agreed company-research workflow. No production implementation is introduced. Selection is a host-owned, pure, versioned policy over normalized evidence; providers retain ownership of source retrieval and source semantics.
+Status: approved and implemented on branch `codex/company-resolution-observations`. Selection is a host-owned, pure, versioned policy over normalized evidence; providers retain ownership of source retrieval and source semantics.
 
 ## Scope
 

@@ -43,3 +43,39 @@ python3 -m unittest discover -s plugins/sec-edgar/tests -v
 ```
 
 Run from the repository root. Tests use injected transport fixtures and an actual JSON-RPC subprocess; no live SEC access occurs. Live checks require an explicitly configured contact identity and are outside the default test suite.
+
+## Company resolution (capability v1)
+
+The optional `company_resolution: 1` handshake capability adds two operations:
+
+- `company_resolution.search`: `{query: {kind: "name", text: "IBM"}, page_size: 100, cursor: null}` or `{query: {kind: "identifier", identifier: {namespace: "sec:ticker", value: "IBM"}, exchange: null}, page_size: 100, cursor: null}`.
+- `company_resolution.lookup`: `{identifier: {namespace: "sec:cik", value: "0000051143"}}`.
+
+Search returns `{items, next_cursor, snapshot, coverage}`. Each candidate contains
+its `sec:cik` identifier, source name, aliases (currently empty), reported listings,
+source URL, SHA-256 checksum of the exact downloaded bytes, retrieval timestamp,
+and match reasons. Listing associations use `sec:ticker` and `sec:exchange`; these
+are SEC labels, not market-provider symbols or ISO exchange codes. Lugus owns
+catalog identity and ambiguity handling. The plugin never chooses among matches.
+Cashtags are parsed by the host; pass `IBM`, not `$IBM`, to ticker search.
+
+Name and ticker search use the SEC ticker/exchange directory. Fields are decoded
+by name and malformed rows fail the search. Listings are grouped by CIK. Names
+match after whitespace normalization and lowercase conversion; exact names sort
+before substrings. Tickers match ASCII case-insensitively after trimming, retaining
+punctuation. An optional `sec:exchange` qualifier restricts ticker matches.
+
+Direct CIK search/lookup uses submissions, including registrants absent from the
+directory. CIK input accepts 1–10 positive ASCII decimal digits and outputs ten
+digits. Lookup checks the returned CIK and rejects unequal ticker/exchange arrays.
+Lookup `not_found` remains an error; CIK search represents it as an exhausted empty
+page with explicit CIK coverage. Neither path claims complete SEC filer discovery.
+
+Search pages retain a single process-local snapshot and deterministic order.
+Continuation pages do not fetch. Cursors are single-use, query/page-size bound,
+and expire on another root resolution search or successful reinitialization.
+Financial ingestion has a separate pagination session. The existing HTTP byte
+limits, SEC URL restrictions, User-Agent, rate limiting and retry policy apply.
+Name queries are bounded to 256 UTF-8 bytes; namespace/identifier/cursor values to
+128 bytes; page sizes are integers from 1 through 100. Unsupported namespaces,
+invalid requests and malformed source data retain separate error kinds.

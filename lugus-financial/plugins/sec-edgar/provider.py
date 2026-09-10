@@ -210,7 +210,7 @@ class HttpTransport:
 class Provider:
     def __init__(self,transport=None,clock=utc_now):
         self.transport=transport; self.injected_transport=transport is not None
-        self.clock=clock; self.initialized=False; self.sessions={}
+        self.clock=clock; self.initialized=False; self.sessions={}; self.resolution=None
     def call(self,method,params):
         if not isinstance(params,dict): raise invalid('Params must be an object')
         if method=='initialize':
@@ -221,10 +221,14 @@ class Provider:
             if not self.injected_transport:
                 if self.transport is None: self.transport=HttpTransport(agent)
                 else: self.transport.user_agent=agent
+            from resolution import Resolution
+            self.resolution=Resolution(self.transport,self.clock)
             self.sessions.clear(); self.initialized=True
-            return {'protocol_version':1,'plugin_id':'sec-edgar','plugin_version':'0.1.0','capabilities':{'filings':1,'fundamentals':1}}
-        if method not in ('filings.list','fundamentals.facts','filings.document'): raise ProviderError('unsupported','Method not found',-32601)
+            return {'protocol_version':1,'plugin_id':'sec-edgar','plugin_version':'0.2.0','capabilities':{'filings':1,'fundamentals':1,'company_resolution':1}}
+        if method not in ('filings.list','fundamentals.facts','filings.document','company_resolution.search','company_resolution.lookup'): raise ProviderError('unsupported','Method not found',-32601)
         if not self.initialized: raise ProviderError('configuration','Initialize first')
+        if method=='company_resolution.search': return self.resolution.search(params)
+        if method=='company_resolution.lookup': return self.resolution.lookup(params)
         if method=='filings.document':
             url=validate_url(params.get('source_url'),True)
             maximum=params.get('max_bytes',MAX_DOCUMENT)

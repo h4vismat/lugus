@@ -430,3 +430,46 @@ impl MarketDataProvider for Plugin {
         Ok(page)
     }
 }
+
+#[async_trait]
+impl crate::resolution::CompanyResolutionProvider for Plugin {
+    async fn search_companies(
+        &mut self,
+        request: &crate::resolution::SearchRequest,
+    ) -> Result<crate::resolution::ResolutionPage> {
+        self.supports("company_resolution")?;
+        request.validate()?;
+        let page: crate::resolution::ResolutionPage = self
+            .call("company_resolution.search", serde_json::to_value(request)?)
+            .await?;
+        if page.validate_for(request).is_err() {
+            let _ = self.close().await;
+            return Err(Error::new(
+                ErrorKind::Protocol,
+                "invalid resolution page or query match",
+            ));
+        }
+        Ok(page)
+    }
+    async fn lookup_company(
+        &mut self,
+        request: &crate::resolution::LookupRequest,
+    ) -> Result<crate::resolution::Candidate> {
+        self.supports("company_resolution")?;
+        request.validate()?;
+        let candidate: crate::resolution::Candidate = self
+            .call("company_resolution.lookup", serde_json::to_value(request)?)
+            .await?;
+        if candidate.validate().is_err()
+            || candidate.identifier != request.identifier
+            || !candidate.match_reasons.is_empty()
+        {
+            let _ = self.close().await;
+            return Err(Error::new(
+                ErrorKind::Protocol,
+                "invalid company lookup identity or record",
+            ));
+        }
+        Ok(candidate)
+    }
+}
