@@ -229,10 +229,7 @@ fn decode_frame(mut frame: Vec<u8>) -> Result<Value> {
 async fn drain_stderr<R: AsyncRead + Unpin>(mut stderr: R) {
     let mut bytes = [0_u8; 1024];
     let mut tail = VecDeque::with_capacity(STDERR_TAIL_BYTES);
-    loop {
-        let Ok(count) = stderr.read(&mut bytes).await else {
-            break;
-        };
+    while let Ok(count) = stderr.read(&mut bytes).await {
         if count == 0 {
             break;
         }

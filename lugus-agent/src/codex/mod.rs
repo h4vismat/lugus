@@ -1,6 +1,7 @@
-// Task 4 consumes this private protocol surface. Keeping it private prevents
-// Codex wire types from becoming part of the provider-independent API.
-#[allow(dead_code)]
+mod events;
 mod process;
-#[allow(dead_code)]
 mod protocol;
+mod session;
+mod version;
+
+pub use session::{AccountStatus, CodexConfig, CodexRuntime};

@@ -1,8 +1,172 @@
+#!/usr/bin/env python3
+
 import json
+import os
 import sys
 import time
 
-scenario = sys.argv[1]
+legacy_scenarios = {
+    "oversized", "partial", "malformed", "invalid_utf8", "silent",
+    "slow_trickle", "blocked_stdin", "eof", "stderr_flood", "ignore_eof",
+    "stderr_descendant", "echo",
+}
+scenario = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in legacy_scenarios else os.path.basename(sys.argv[0])
+
+if len(sys.argv) > 1 and sys.argv[1] == "--version":
+    if scenario == "bad_version":
+        print("codex-cli 0.154.0")
+    elif scenario == "oversized_version":
+        print("x" * 5000)
+    else:
+        print("codex-cli 0.153.4")
+    sys.exit(0)
+
+
+def read_message():
+    line = sys.stdin.readline()
+    if not line:
+        sys.exit(0)
+    return json.loads(line)
+
+
+def send(message):
+    print(json.dumps(message, separators=(",", ":")), flush=True)
+
+
+def rpc_result(request, result):
+    send({"id": request["id"], "result": result})
+
+
+def thread(index):
+    return {
+        "cliVersion": "0.153.4", "createdAt": 1, "cwd": os.getcwd(),
+        "ephemeral": True, "id": f"thread-{index}", "modelProvider": "test-provider",
+        "preview": "", "projectId": None, "sessionId": f"session-{index}",
+        "source": "appServer", "status": "idle", "turns": [], "updatedAt": 1,
+    }
+
+
+def turn(turn_id, status="inProgress", items=None):
+    return {"id": turn_id, "items": items or [], "status": status}
+
+
+def validate_client_request(message, expected_id, method):
+    if message.get("id") != expected_id or message.get("method") != method:
+        send({"id": message.get("id", expected_id), "error": {"code": -32600, "message": "unexpected client request"}})
+        sys.exit(1)
+
+
+def serve_session():
+    initialize = read_message()
+    expected_initialize = {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {"name": "lugus", "version": "0.1.0"},
+            "capabilities": {"experimentalApi": True},
+        },
+    }
+    if initialize != expected_initialize:
+        send({"id": initialize.get("id", 1), "error": {"code": -32600, "message": "initialize required"}})
+        return
+    rpc_result(initialize, {
+        "codexHome": os.getcwd(), "platformFamily": "unix",
+        "platformOs": sys.platform, "userAgent": "codex-cli/0.153.4",
+    })
+    if read_message() != {"method": "initialized"}:
+        return
+
+    next_id = 2
+    thread_index = 0
+    while True:
+        message = read_message()
+        if message.get("method") == "account/read":
+            validate_client_request(message, next_id, "account/read")
+            next_id += 1
+            if message.get("params") != {}:
+                sys.exit(1)
+            if scenario == "login_required":
+                rpc_result(message, {"account": None, "requiresOpenaiAuth": True})
+            elif scenario == "provider_auth":
+                rpc_result(message, {"account": None, "requiresOpenaiAuth": False})
+            else:
+                rpc_result(message, {"account": {"type": "apiKey"}, "requiresOpenaiAuth": True})
+            continue
+
+        validate_client_request(message, next_id, "thread/start")
+        next_id += 1
+        if scenario == "rpc_error":
+            send({"id": message["id"], "error": {"code": -32000, "message": "thread rejected"}})
+            continue
+
+        thread_index += 1
+        thread_id = f"thread-{thread_index}"
+        params = message.get("params", {})
+        tools = params.get("dynamicTools")
+        expected_tool = {
+            "type": "function", "name": "lugus_recall",
+            "description": "Recall stored findings",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"thesis_id": {"type": "string"}},
+                "required": ["thesis_id"], "additionalProperties": False,
+            },
+        }
+        if params.get("cwd") != os.getcwd() or params.get("baseInstructions") != "You are the Lugus review agent." or params.get("developerInstructions") != "Use only the supplied thesis context." or tools != [expected_tool]:
+            send({"id": message["id"], "error": {"code": -32602, "message": "invalid thread settings"}})
+            continue
+        if scenario == "normal" and (params.get("model") != "gpt-test" or params.get("modelProvider") != "test-provider"):
+            send({"id": message["id"], "error": {"code": -32602, "message": "missing model overrides"}})
+            continue
+        rpc_result(message, {
+            "activePermissionProfile": None, "approvalPolicy": "never", "approvalsReviewer": "disabled",
+            "cwd": os.getcwd(), "instructionSources": [], "model": params.get("model") or "gpt-test",
+            "modelProvider": params.get("modelProvider") or "test-provider", "multiAgentMode": "explicitRequestOnly",
+            "reasoningEffort": None, "runtimeWorkspaceRoots": [], "sandbox": {"type": "readOnly"},
+            "serviceTier": None, "thread": thread(thread_index),
+        })
+
+        start = read_message()
+        validate_client_request(start, next_id, "turn/start")
+        next_id += 1
+        turn_id = f"turn-{thread_index}"
+        if start.get("params") != {"threadId": thread_id, "input": [{"type": "text", "text": "Review thesis A"}]}:
+            send({"id": start["id"], "error": {"code": -32602, "message": "invalid turn settings"}})
+            continue
+        rpc_result(start, {"turn": turn(turn_id)})
+
+        tool_name = "missing_tool" if scenario == "unknown_tool" else "lugus_recall"
+        call_thread = "thread-other" if scenario == "wrong_thread" else thread_id
+        send({
+            "id": f"server-{thread_index}", "method": "item/tool/call",
+            "params": {"arguments": {"thesis_id": "thesis-A"},
+                       "callId": "call-1", "threadId": call_thread, "tool": tool_name,
+                       "turnId": turn_id, "namespace": None},
+        })
+        if scenario == "wrong_thread":
+            continue
+        tool_response = read_message()
+        success = scenario != "unknown_tool"
+        expected_content = "Stored finding from thesis A" if success else "unknown tool: missing_tool"
+        expected_response = {
+            "id": f"server-{thread_index}",
+            "result": {"contentItems": [{"type": "inputText", "text": expected_content}], "success": success},
+        }
+        if tool_response != expected_response:
+            sys.exit(1)
+
+        send({"method": "item/agentMessage/delta", "params": {
+            "delta": "Assessment uses ", "itemId": "message-1", "threadId": thread_id, "turnId": turn_id}})
+        send({"method": "item/agentMessage/delta", "params": {
+            "delta": "stored finding from thesis A.", "itemId": "message-1", "threadId": thread_id, "turnId": turn_id}})
+        item = {"id": "message-1", "text": "Assessment uses stored finding from thesis A.", "type": "agentMessage"}
+        send({"method": "item/completed", "params": {"item": item, "threadId": thread_id, "turnId": turn_id}})
+        send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "completed", [item])}})
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "app-server":
+    serve_session()
+    sys.exit(0)
 
 if scenario == "oversized":
     sys.stdout.write("x" * 2048 + "\n")
