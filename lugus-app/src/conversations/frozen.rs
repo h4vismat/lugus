@@ -311,9 +311,9 @@ fn validate_passage(p: &crate::passages::Passage) -> Result<()> {
         match (&m.kind, &m.source) {
             (MappingKind::Synthetic, None) if selected.chars().all(char::is_whitespace) => (),
             (MappingKind::Exact | MappingKind::Normalized, Some(source)) => {
+                // Node IDs are opaque u32 identities; max_nodes bounds their count above.
                 if source.start >= source.end
                     || source.end > cap.max_source_bytes
-                    || source.node_id as usize >= cap.max_nodes
                     || (m.kind == MappingKind::Exact
                         && source.end - source.start != m.end - m.start)
                     || (m.kind == MappingKind::Normalized && selected != " ")

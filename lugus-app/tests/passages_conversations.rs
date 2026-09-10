@@ -187,6 +187,11 @@ async fn restored_passage_checks_typed_shape_identity_checksums_and_mapping_cove
         ("/end", serde_json::json!(6)),
         ("/representation/workspace_id", serde_json::json!("other")),
         (
+            "/representation/source_node_count",
+            serde_json::json!(200_001),
+        ),
+        ("/representation/mapping_count", serde_json::json!(500_001)),
+        (
             "/representation/text_checksum",
             serde_json::json!("invalid"),
         ),
@@ -296,4 +301,124 @@ async fn oversized_required_passage_rejects_before_runtime_or_turn_admission() {
     );
     host.shutdown().await.unwrap();
     app.shutdown().await.unwrap();
+}
+
+struct SparseNodeExtractor(u32);
+impl TextExtractor for SparseNodeExtractor {
+    fn identity(&self) -> ExtractorIdentity {
+        ExtractorIdentity {
+            policy: "sparse-node-fixture".into(),
+            ..ExtractorIdentity::html_v1()
+        }
+    }
+    fn extract(
+        &self,
+        bytes: &[u8],
+        media_type: &str,
+        limits: &TextLimits,
+        cancellation: &std::sync::atomic::AtomicBool,
+    ) -> Result<ExtractedText> {
+        let mut extracted = extract_html(bytes, media_type, limits, cancellation)?;
+        assert_eq!(extracted.source_nodes.len(), 1);
+        extracted.extractor = self.identity();
+        extracted.source_nodes[0].node_id = self.0;
+        for mapping in &mut extracted.mappings {
+            if let Some(source) = &mut mapping.source {
+                source.node_id = self.0;
+            }
+        }
+        Ok(extracted)
+    }
+}
+
+#[tokio::test]
+async fn injected_sparse_node_ids_survive_preparation_and_frozen_runtime_admission() {
+    for node_id in [200_000, u32::MAX] {
+        let dir = tempfile::tempdir().unwrap();
+        let fin = dir.path().join("fin");
+        let mut store = open(&dir.path().join("app"), &fin, 1);
+        let conversation = store
+            .conversation_store_mut()
+            .unwrap()
+            .create_conversation("create", "Sparse source nodes")
+            .unwrap();
+        let mut scoped = scope();
+        scoped.workspace_id = conversation.workspace_id.clone();
+        let dataset = dataset_scoped(&mut store, &fin, "<p>Revenue &amp; cash grew.</p>", &scoped);
+        let app = Application::start_with_text_options(
+            vec![],
+            Arc::new(SqliteRepositoryFactory::new(&fin)),
+            Box::new(store),
+            Limits::default(),
+            HostBounds::default(),
+            Box::new(Ids(std::sync::atomic::AtomicU64::new(1000))),
+            TextPreparationOptions {
+                extractor: Arc::new(SparseNodeExtractor(node_id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let representation = app.prepare_text(&scoped, &dataset.id).await.unwrap();
+        assert_eq!(representation.source_node_count, 1);
+        let passage = app
+            .create_passage(
+                &scoped,
+                CreatePassageRequest {
+                    representation_id: representation.id,
+                    start: 0,
+                    end: 20,
+                    expected_text: "Revenue & cash grew.".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            app.resolve_passage(&scoped, &passage.id)
+                .await
+                .unwrap()
+                .sources[0]
+                .node_id,
+            node_id
+        );
+        let factory = Arc::new(Factory::default());
+        let host =
+            ConversationHost::start(app.clone(), factory.clone(), ConversationOptions::default())
+                .await
+                .unwrap();
+        let run = host
+            .send(SendMessageRequest {
+                conversation_id: conversation.id.clone(),
+                request_id: "select-sparse-node".into(),
+                text: "Explain the selected passage".into(),
+                selected: vec![SelectedReference::Passage {
+                    id: passage.id.clone(),
+                }],
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            host.wait(&conversation.id, &run.id).await.unwrap().status,
+            RunStatus::Completed
+        );
+        let request = factory.0.lock().unwrap()[0].clone();
+        assert!(request.context.is_empty());
+        let data: serde_json::Value = serde_json::from_str(&request.prompt).unwrap();
+        let frozen: FrozenReference =
+            serde_json::from_value(data["references"][0].clone()).unwrap();
+        frozen.validate(&ConversationLimits::default()).unwrap();
+        let restored: Passage = serde_json::from_str(&frozen.serialized).unwrap();
+        assert_eq!(restored.quote, "Revenue & cash grew.");
+        assert!(restored.mappings.iter().all(|mapping| {
+            mapping
+                .source
+                .as_ref()
+                .is_some_and(|source| source.node_id == node_id)
+        }));
+        let direct =
+            FrozenReference::from_passage(&passage, &ConversationLimits::default()).unwrap();
+        assert_eq!(frozen, direct);
+        host.shutdown().await.unwrap();
+        app.shutdown().await.unwrap();
+    }
 }
