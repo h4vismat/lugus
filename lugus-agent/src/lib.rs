@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod error;
+pub mod runtime;
+pub mod tools;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::{Error, Result};
+pub use runtime::{
+    AgentRuntime, RunLimits, RunOutcome, RunReport, RunRequest, RuntimeEvent, validate_request,
+};
+pub use tools::{ToolCall, ToolExecutor, ToolResult, ToolSpec};
