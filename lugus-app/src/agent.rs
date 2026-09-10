@@ -14,6 +14,8 @@ pub struct ResearchExecutor {
     scope: Scope,
     offering: Offering,
     specs: Vec<ToolSpec>,
+    output_bytes: usize,
+    cancellation: Option<tokio::sync::watch::Receiver<bool>>,
 }
 impl ResearchExecutor {
     /// The host captures one immutable turn offering. Model arguments never construct scope.
@@ -26,12 +28,26 @@ impl ResearchExecutor {
         let mut specs = fetch_tool_specs(&offering);
         specs.extend(cached_tool_specs(application.limits()));
         specs.extend(bindings::tool_specs(application.limits(), &offering));
+        let output_bytes = application.limits().max_output_bytes;
         Ok(Self {
+            output_bytes,
+            cancellation: None,
             application,
             scope,
             offering,
             specs,
         })
+    }
+    pub(crate) fn for_conversation(
+        application: Application,
+        scope: Scope,
+        output_bytes: usize,
+        cancellation: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Self> {
+        let mut executor = Self::new(application, scope)?;
+        executor.output_bytes = executor.output_bytes.min(output_bytes);
+        executor.cancellation = Some(cancellation);
+        Ok(executor)
     }
     pub fn tool_specs(&self) -> &[ToolSpec] {
         &self.specs
@@ -78,7 +94,22 @@ impl ResearchExecutor {
             scope: scope.clone(),
             id: Some(receipt.id.clone()),
         };
-        let terminal = self.application.wait(scope, &receipt.id).await?;
+        let terminal = self.application.wait(scope, &receipt.id);
+        tokio::pin!(terminal);
+        if let Some(mut cancel) = self.cancellation.clone() {
+            tokio::select! {
+                biased;
+                _ = async { while !*cancel.borrow_and_update() { if cancel.changed().await.is_err() { break; } } } => {
+                    self.application.cancel(scope, &receipt.id)?;
+                }
+                terminal = &mut terminal => {
+                    let terminal = terminal?;
+                    guard.id = None;
+                    return Ok((terminal.state == JobState::Succeeded, self.value(terminal)?));
+                }
+            }
+        }
+        let terminal = terminal.await?;
         guard.id = None;
         Ok((terminal.state == JobState::Succeeded, self.value(terminal)?))
     }
@@ -132,30 +163,41 @@ impl ResearchExecutor {
         }
     }
 }
-#[async_trait::async_trait]
-impl ToolExecutor for ResearchExecutor {
-    async fn execute(&self, call: ToolCall) -> ToolResult {
+impl ResearchExecutor {
+    /// Distinguish host output-budget failure from a returned provider/job failure receipt.
+    pub(crate) async fn execute_recorded(&self, call: ToolCall) -> Result<ToolResult> {
         let result = self.dispatch(&call).await;
         let (success, content) = match result {
             Ok((success, value)) => (success, serde_json::to_string(&value)),
+            Err(error) if error.kind == ErrorKind::ResourceLimit => return Err(error),
             Err(error) => (false, serde_json::to_string(&error)),
         };
-        let result = ToolResult { success, content: content.unwrap_or_else(|_| "{\"kind\":\"invalid_input\",\"message\":\"result encoding failed\",\"retryable\":false,\"retry_after_seconds\":null}".into()) };
-        if check_serialized_size(&result, self.application.limits().max_output_bytes).is_ok() {
-            result
-        } else {
-            ToolResult {
-                success: false,
-                content: serde_json::to_string(&AppError::new(
-                    ErrorKind::ResourceLimit,
-                    "tool result exceeds serialized output budget; request a smaller page",
-                    false,
-                ))
-                .expect("fixed error serializes"),
-            }
-        }
+        let result = ToolResult {
+            success,
+            content: content.map_err(|_| invalid("result encoding failed"))?,
+        };
+        check_serialized_size(&result, self.output_bytes).map_err(|_| {
+            AppError::new(
+                ErrorKind::ResourceLimit,
+                "tool result exceeds serialized output budget; request a smaller page",
+                false,
+            )
+        })?;
+        Ok(result)
     }
 }
+#[async_trait::async_trait]
+impl ToolExecutor for ResearchExecutor {
+    async fn execute(&self, call: ToolCall) -> ToolResult {
+        self.execute_recorded(call)
+            .await
+            .unwrap_or_else(|error| ToolResult {
+                success: false,
+                content: serde_json::to_string(&error).expect("bounded error serializes"),
+            })
+    }
+}
+
 struct CancelOnDrop {
     application: Application,
     scope: Scope,

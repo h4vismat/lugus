@@ -1,6 +1,7 @@
 //! Shared admission, lifecycle and supervised jobs. SQL always crosses a blocking boundary.
 use crate::*;
 mod bindings;
+mod conversations;
 pub use bindings::BoundPriceRequest;
 use serde::{Deserialize, Serialize};
 use std::{

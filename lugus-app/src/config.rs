@@ -25,6 +25,9 @@ pub struct ApplicationConfig {
     pub limits: Limits,
     #[serde(default)]
     pub host_bounds: HostBounds,
+    /// None loads persisted bounds (defaults for a fresh store). Changes require migration.
+    #[serde(default)]
+    pub conversation_limits: Option<crate::conversations::ConversationLimits>,
 }
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 fn invalid() -> AppError {
@@ -71,6 +74,9 @@ impl ApplicationConfig {
     fn validate(&self) -> Result<()> {
         self.limits.validate()?;
         self.host_bounds.validate()?;
+        if let Some(limits) = &self.conversation_limits {
+            limits.validate()?;
+        }
         crate::agent_contract::check_serialized_size(self, MAX_CONFIG_BYTES)?;
         if self.providers.len() > 1024
             || self.financial_path.as_os_str().is_empty()
@@ -135,13 +141,24 @@ impl ApplicationConfig {
                 let evidence =
                     lugus_financial::storage::SqliteRepository::open(&self.financial_path)
                         .map_err(AppError::from)?;
-                let store = SqliteApplicationStore::open(
-                    &self.application_path,
-                    Box::new(evidence),
-                    self.limits.clone(),
-                    Box::new(SystemClock),
-                    Box::new(store_ids),
-                )?;
+                let store = if let Some(conversation_limits) = self.conversation_limits {
+                    SqliteApplicationStore::open_with_conversation_limits(
+                        &self.application_path,
+                        Box::new(evidence),
+                        self.limits.clone(),
+                        conversation_limits,
+                        Box::new(SystemClock),
+                        Box::new(store_ids),
+                    )?
+                } else {
+                    SqliteApplicationStore::open(
+                        &self.application_path,
+                        Box::new(evidence),
+                        self.limits.clone(),
+                        Box::new(SystemClock),
+                        Box::new(store_ids),
+                    )?
+                };
                 Ok::<_, AppError>((
                     providers,
                     repositories,
