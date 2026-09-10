@@ -4,7 +4,7 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The next milestone is **company-to-market-instrument binding**. Determine and approve the validation source/contract before implementation; an SEC ticker match alone must not create a market-provider association.
+The current milestone is **company-to-market-instrument binding**, in progress on local branch `codex/instrument-binding` in `/private/tmp/lugus-backend-development`. The user approved automatic agent-created bindings backed by saved company/listing and market-provider metadata. Follow the approved binding design and implementation plan; no routine manual mapping confirmation is required.
 
 Production application runtime and capability routing are implemented on local branch `codex/application-runtime` in worktree `/private/tmp/lugus-backend-development`, through implementation/fix commit `403aa1d`, based on `eea83bf`. The branch remains local and unmerged. Read the application README and completed plan before starting the next milestone.
 
@@ -73,9 +73,9 @@ See [`lugus-app/README.md`](../../lugus-app/README.md) for the public API, limit
 
 ### 2. Company-to-market-instrument binding
 
-Connect a resolved company to a selected market provider's instrument using explicit mappings and validation. Preserve mapping provenance, multiple listings/share classes, ambiguity, and history.
+Connect a resolved company to a selected market provider's instrument through agent-created, source-supported bindings. The agent selects the exact saved company observation and listing, looks up metadata from the chosen market provider, and requests a binding. A pure versioned application policy checks issuer identity, ticker, exchange, and instrument type before saving immutable provenance. Clear matches proceed automatically; incomplete or conflicting evidence cannot create a binding. Preserve multiple listings/share classes, ambiguity, and history.
 
-Resolving `$IBM` to an SEC entity enables company identification. An SEC ticker match alone must not silently create a `yahoo:symbol` association. Determine the validation source/contract before implementation; explicit user-declared mappings may be represented honestly as such.
+SEC source data already retains company identifiers and listings. Market-provider metadata supplies the other side of the association; a successful price fetch or an echoed request symbol does not establish issuer identity. The approved v1 adapter reads source chart metadata through the pinned yfinance public API. See the approved design and execution plan below.
 
 **Exit:** select the intended company and instrument, fetch its prices through the selected provider, and retain the evidence for that association. Ambiguity cannot silently choose a listing or provider.
 
@@ -121,6 +121,8 @@ This full workflow is not yet implemented. The application runtime is complete; 
 
 Paths are relative to the repository root; inspect the implementation branch when a file is absent from the current checkout.
 
+- `docs/superpowers/specs/2026-09-10-instrument-binding-design.md` — approved automatic source-supported binding design.
+- `docs/superpowers/plans/2026-09-10-instrument-binding.md` — current binding implementation plan.
 - `docs/superpowers/specs/2026-09-10-application-runtime-design.md` — approved runtime boundaries.
 - `docs/superpowers/plans/2026-09-10-application-runtime.md` — completed implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-desktop-research-design.md` — approved product scope; this roadmap supersedes its older interleaved delivery sequence.
