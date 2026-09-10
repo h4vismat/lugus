@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans task by task. Steps use checkboxes for tracking.
 
-**Status:** Implementation and task reviews complete; final whole-milestone review pending.
+**Status:** Complete. Implementation, final verification and independent reviews passed; branch and worktree remain local.
 
 **Goal:** Persist research conversations and workspaces, execute thesis-free disposable turns with frozen bounded context, and recover without replaying completed work.
 **Architecture:** Application-owned conversation records and a supervised coordinator wrap existing ResearchExecutor/AgentRuntime ports. Pure context/state functions are separate from SQLite, runtime and execution ownership effects. Preserve existing financial and review storage.
@@ -108,16 +108,16 @@ assert_eq!(completed_first_run_tool_count_after, completed_first_run_tool_count_
 ## Final verification and completion (root)
 
 - [x] Run workspace/all-target offline locked tests, workspace/all-target/all-feature strict Clippy, fmt, unchanged SEC/yfinance suites as appropriate. Execute fresh standalone CLI flow and crash/recover/continue using only returned IDs. Confirm legacy reviews and binding acceptance still work.
-- [ ] Whole-branch review against e65942b; fix confirmed findings with regression and scoped re-review. Record test counts and material limits.
-- [ ] Update roadmap milestone3 complete/nextmilestone4 filing text/passages, preserve pending main files, keep branch/worktree local. No merge/push. Remove only this completed plan's temporary SDD workspace after completion record committed.
+- [x] Whole-branch review against e65942b; fix confirmed findings with regression and scoped re-review. Record test counts and material limits.
+- [x] Update roadmap milestone3 complete/nextmilestone4 filing text/passages, preserve pending main files, keep branch/worktree local. No merge/push. Remove only this completed plan's temporary SDD workspace after completion record committed.
 
 ## Implementation and verification record
 
-Implementation is local on `codex/durable-conversations` in `/private/tmp/lugus-backend-development`, through `1d13517`, based on the completed binding milestone `e65942b`. Task commits: contracts `4f4cf23`/`63460e8`; storage `ef755ad`; host `d25c698`/`5ce2495`; CLI `3c983e3`/`1d13517`. Independent task reviews and scoped fix reviews are complete. Review found and fixed restored-reference validation, post-admission supervision/publication races, and CLI stdout backpressure.
+Implementation is local on `codex/durable-conversations` in `/private/tmp/lugus-backend-development`, through `af1aa68`, based on the completed binding milestone `e65942b`. Task commits: contracts `4f4cf23`/`63460e8`; storage `ef755ad`; host `d25c698`/`5ce2495`; CLI `3c983e3`/`1d13517`. Independent task reviews and scoped fix reviews are complete. Review found and fixed restored-reference validation, post-admission supervision/publication races, and CLI stdout backpressure.
 
 Verified on the corrected implementation:
 
-- `cargo test --workspace --all-targets --offline --locked`: **359 passed**, 51 suites, zero failures or ignored tests; includes runtime/Codex adapter, legacy thesis-review and binding CLI regressions.
+- `cargo test --workspace --all-targets --offline --locked`: **363 passed**, 51 suites, zero failures or ignored tests; includes runtime/Codex adapter, legacy thesis-review and binding CLI regressions.
 - `cargo clippy --workspace --all-targets --all-features --offline --locked -- -D warnings`, `cargo fmt --all --check`, and `git diff --check`: passed.
 - SEC Python adapter: **31 passed**; pinned yfinance environment: **23 passed**. Adapter source hashes remained unchanged through final verification.
 - Independent fresh CLI process workflow: twelve actual research tools, offline restoration after manifest removal, a fresh zero-tool follow-up with three frozen references, original closed-view evidence readable, an actual killed owner with pending tool outcome retained, rejected competing recovery, recovery without inserted messages/tools/activity, and a new explicit twelve-tool turn. Earlier completed records stayed unchanged. No thesis database or live model/provider credentials were used.
@@ -131,4 +131,6 @@ Implementation decisions:
 
 Limits: execution locking supports canonical local files and symlink aliases, not hard-link aliases or network filesystems. Unknown tool outcomes are never replayed automatically. Runtime factories own cancellation-safe startup until returning a runtime; callers explicitly shut down the host. Permanent storage failure is surfaced and may require later recovery. The CLI uses a deterministic actual AgentRuntime fixture; live model acceptance, document text extraction, refresh and desktop rendering remain outside this milestone. CLI final output has a finite delivery deadline after host cleanup; a slow or broken output pipe may leave incomplete NDJSON while durable status remains readable.
 
-Whole-milestone review and roadmap completion remain the final gates.
+Final whole-milestone review and scoped re-review are complete with no open findings. Final fix `af1aa68` orders journal completion accounting before result publication, preserves safe durable `authentication_required` and `needs_attention` categories through offline reopening, formats the schema SQL without semantic changes, and adds deterministic coverage for an external metadata commit during context preparation. All four final-review findings were verified addressed.
+
+The final corrected tree passed the full 363-test workspace run, strict Clippy and formatting, and another independent standalone workflow. Milestone 3 is complete; milestone 4, filing text and passage references, is next. The main-checkout roadmap is synchronized only after checking its saved content hash. No merge or push was performed. Temporary execution/review scratch is removed after this completion record is committed; the implementation, decisions, limitations and verification record remain here and in the application README.

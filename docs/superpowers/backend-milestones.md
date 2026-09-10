@@ -4,7 +4,7 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The current milestone is **durable conversations and research workspaces**, in progress on local branch `codex/durable-conversations` in `/private/tmp/lugus-backend-development`. The user approved its design; follow `docs/superpowers/plans/2026-09-10-durable-conversations.md` and its execution ledger rather than restarting implementation. Company-to-market-instrument binding is implemented on local branch `codex/instrument-binding` in worktree `/private/tmp/lugus-backend-development`, through `20d5fb8`. This branch includes the completed production application runtime and company-resolution/observation foundations. It remains local and unmerged. Read the application README and completed binding plan before starting the next milestone.
+The next milestone is **filing text and passage references** (milestone 4). Durable conversations and research workspaces are implemented on local branch `codex/durable-conversations` in `/private/tmp/lugus-backend-development`, through `af1aa68` plus completion documentation. This branch includes the completed application runtime, company resolution, observation selection and company-to-market binding (`e65942b`). It remains local and unmerged. Read the application README and completed conversation plan before designing the next milestone.
 
 First check repository/branch state. Company resolution and observation selection were implemented in `eea83bf`; application runtime and lifecycle fixes extend through `403aa1d`, with its completion documentation at `781a539`. Binding work builds on that commit. These features have not been merged into `main`; do not infer missing implementation from a checkout of `main`, repeat the work, or overwrite pending documents. Temporary worktree paths may change; branch and commit identify the implementation.
 
@@ -65,7 +65,7 @@ Implemented in `lugus-app` through `403aa1d`:
 
 Verification: **243 workspace/all-target Rust tests**, strict workspace/all-target/all-feature Clippy, formatting, **31 SEC Python tests** and **12 yfinance Python tests** passed. Independent foundation and integration reviews were completed; confirmed findings were fixed and re-reviewed. A fresh standalone CLI run verified two real synthetic provider instances, explicit unavailable-provider behavior, exact decimal prices, accepted views with no presentation claim, and offline reopening after removing the provider manifest. No live model or provider-network call was required.
 
-See [`lugus-app/README.md`](../../lugus-app/README.md) for the public API, limits and reproducible CLI commands. Job status is bounded and in-memory; durable fetch/dataset/view references survive restart. Conversation recovery, automatic refresh and desktop rendering remain later milestones.
+See [`lugus-app/README.md`](../../lugus-app/README.md) for the public API, limits and reproducible CLI commands. Job status is bounded and in-memory; durable fetch/dataset/view references survive restart. Conversation recovery is delivered by milestone 3; automatic refresh and desktop rendering remain later milestones.
 
 **Exit met:** manual and actual `AgentRuntime` calls use the same production application operations, with explicit scope/provenance and correct unavailable-provider behavior.
 
@@ -87,13 +87,20 @@ Source detail: yfinance `get_info()` overwrites the source symbol with the reque
 
 **Exit met:** agents and manual clients can select supported company/listing evidence, create a binding, fetch prices through its pinned provider, and retain that association offline without silently resolving ambiguity.
 
-### 3. Durable conversations and research workspaces
+### 3. Durable conversations and research workspaces — complete
 
-Persist conversations, messages, agent runs, selected context, and research-view references. Reconstruct bounded context across disposable turns and restore workspaces after restart without replaying completed model turns.
+Implemented in `lugus-app`, with explicit conversation/thesis identity in `lugus-agent`:
 
-Separate conversation identity from the generic harness's currently required thesis identity. Integrate startup recovery and shutdown with the application host. Saved messages, view references, and assessments must retain their original evidence meaning after refresh.
+- Application-owned conversations, immutable messages and frozen bounded context, durable runs/activity/tool receipts, and one ordered research workspace per conversation. Required selected evidence keeps exact source meaning; older complete exchanges may be omitted with an explicit count.
+- Fresh supervised runtime per turn, request deduplication, fenced terminal completion, recorded tool intent/result, bounded cancellation and shutdown, and exclusive local execution ownership before crash recovery. Unknown tool outcomes are preserved without automatic replay.
+- Persisted view order/selection with revision checks, multiple-company support, closed tabs retaining readable originals, and additive application schema v3 preserving prior evidence/bindings/review storage.
+- Shared CLI/manual APIs with thesis-free actual twelve-tool Apple/AAPL research, offline restore, fresh follow-up context, real killed-process recovery and successful explicit continuation. CLI cancellation targets its owning stdin session; output backpressure cannot stall cleanup.
 
-**Exit:** ask a question, obtain a research-view request, restart the host, reopen the conversation and its views, and continue with the intended context.
+Verification: **363 workspace/all-target Rust tests**, strict workspace/all-target/all-feature Clippy, formatting, **31 SEC Python tests** and **23 yfinance Python tests** passed. Independent task/fix reviews and the final whole-milestone review were completed. A fresh standalone run proved twelve research tools, a zero-tool fresh follow-up with three frozen references, offline restoration after manifest removal, original evidence after tab closure, exclusive crash recovery without inserted records or replay, and a new explicit twelve-tool turn.
+
+Version 1 limits: conversation bounds are persisted (changes need an explicit configuration migration); execution ownership supports canonical local files/symlink aliases, not hard-link/network-filesystem aliases. Runtime factories own cancellation-safe startup until returning a runtime. The CLI fixture exercises the actual AgentRuntime interface without live model/network acceptance; selected document observations remain metadata until milestone 4 adds text extraction. See [`lugus-app/README.md`](../../lugus-app/README.md) and the [completed plan](plans/2026-09-10-durable-conversations.md).
+
+**Exit met:** ask a question, obtain a research-view request, restart and reopen the conversation and its views offline, then continue with the intended frozen context without replaying earlier work.
 
 ### 4. Filing text and passage references
 
@@ -123,14 +130,14 @@ This milestone owns desktop transport, rendering, keyboard/focus behavior, view-
 
 Resolve `$IBM` → select its market instrument → fetch available data through configured capabilities → ask questions → request structured research views → save and reopen the conversation → refresh only the active workspace → inspect an earlier review with its original evidence.
 
-This full workflow is not yet implemented. The application runtime and company-to-market binding are complete; durable conversations, passage extraction, active-workspace refresh and desktop integration remain. The deterministic agent acceptance uses a real thesis because generic conversation identity is still milestone 3.
+This full workflow is not yet implemented. The application runtime, company-to-market binding and durable conversations are complete; filing text/passages, active-workspace refresh and desktop integration remain. The conversation acceptance uses a thesis-free runtime; the separate legacy fixture still exercises a real persisted thesis.
 
 ## Reading list
 
 Paths are relative to the repository root; inspect the implementation branch when a file is absent from the current checkout.
 
 - `docs/superpowers/specs/2026-09-10-durable-conversations-design.md` — approved conversation persistence/recovery boundaries.
-- `docs/superpowers/plans/2026-09-10-durable-conversations.md` — current milestone execution plan.
+- `docs/superpowers/plans/2026-09-10-durable-conversations.md` — completed conversation implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-instrument-binding-design.md` — approved automatic source-supported binding design.
 - `docs/superpowers/plans/2026-09-10-instrument-binding.md` — completed binding implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-application-runtime-design.md` — approved runtime boundaries.
