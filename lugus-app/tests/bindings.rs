@@ -626,3 +626,151 @@ fn failed_lookup_receipt_remains_safe_without_financial_run() {
         ErrorKind::MissingData
     );
 }
+#[test]
+fn binding_admission_reserves_every_status_envelope_before_mutation() {
+    struct FixedId(String);
+    impl IdSource for FixedId {
+        fn next_id(&self) -> String {
+            self.0.clone()
+        }
+    }
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            "2026-09-10T00:00:00Z".parse().unwrap()
+        }
+    }
+    let mut f = Fixture::new();
+    let mut expected = f.store.bind(&scope("seed"), &f.request).unwrap();
+    let escaped_id = "\\".repeat(Scope::MAX_ID_BYTES);
+    let binding_scope = Scope {
+        run_id: Some(escaped_id.clone()),
+        ..scope("edge")
+    };
+    expected.id = escaped_id.clone();
+    expected.scope = binding_scope.clone();
+    expected.created_at = Clock::now(&FixedClock);
+    let record_bytes = serde_json::to_vec(&expected).unwrap().len();
+    let largest_view_bytes = serde_json::to_vec(&BindingView {
+        record: expected,
+        status: BindingStatus::Superseded {
+            binding_id: escaped_id.clone(),
+        },
+    })
+    .unwrap()
+    .len();
+    assert!(record_bytes >= Limits::MIN_OUTPUT_BYTES);
+    let open_bounded = |maximum, id: String| {
+        SqliteApplicationStore::open(
+            &f.app,
+            Box::new(SqliteRepository::open(&f.financial).unwrap()),
+            Limits {
+                max_output_bytes: maximum,
+                max_read_page_bytes: maximum,
+                ..Limits::default()
+            },
+            Box::new(FixedClock),
+            Box::new(FixedId(id)),
+        )
+        .unwrap()
+    };
+    let conn = rusqlite::Connection::open(&f.app).unwrap();
+    let counts = || {
+        conn.query_row("SELECT (SELECT count(*) FROM app_records),(SELECT count(*) FROM binding_history),(SELECT count(*) FROM binding_requests)", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?))).unwrap()
+    };
+    for maximum in [record_bytes, largest_view_bytes - 1] {
+        let mut bounded = open_bounded(maximum, escaped_id.clone());
+        let before = counts();
+        assert_eq!(
+            bounded.bind(&binding_scope, &f.request).unwrap_err().kind,
+            ErrorKind::ResourceLimit
+        );
+        assert_eq!(
+            counts(),
+            before,
+            "rejected admission must not append anything"
+        );
+    }
+    let mut bounded = open_bounded(largest_view_bytes, escaped_id.clone());
+    let first = bounded.bind(&binding_scope, &f.request).unwrap();
+    assert_eq!(
+        bounded
+            .read_binding(&binding_scope, &first.id)
+            .unwrap()
+            .status,
+        BindingStatus::Active
+    );
+    assert_eq!(
+        bounded
+            .prepare_binding(&binding_scope, &first.id)
+            .unwrap()
+            .id,
+        first.id
+    );
+    // Removing the escaped run id exactly offsets adding the same escaped supersedes id.
+    // Both revisions therefore fit the same boundary; the replacement ID is also maximally escaped.
+    // A smaller replacement record must not let a tighter reopened store append
+    // an unreadable superseded view to a previously accepted revision.
+    let mut tightened = open_bounded(largest_view_bytes - 1, "\"".repeat(Scope::MAX_ID_BYTES));
+    let before = counts();
+    assert_eq!(
+        tightened
+            .bind(
+                &Scope {
+                    run_id: None,
+                    ..scope("x")
+                },
+                &BindRequest {
+                    supersedes: Some(first.id.clone()),
+                    ..f.request.clone()
+                }
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::ResourceLimit
+    );
+    assert_eq!(counts(), before);
+    let next_scope = Scope {
+        run_id: None,
+        ..scope("next")
+    };
+    let mut replacement_store = open_bounded(largest_view_bytes, "\"".repeat(Scope::MAX_ID_BYTES));
+    let next = replacement_store
+        .bind(
+            &next_scope,
+            &BindRequest {
+                supersedes: Some(first.id.clone()),
+                ..f.request.clone()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        bounded
+            .read_binding(&binding_scope, &first.id)
+            .unwrap()
+            .status,
+        BindingStatus::Superseded {
+            binding_id: next.id.clone()
+        }
+    );
+    assert_eq!(
+        bounded.prepare_binding(&next_scope, &next.id).unwrap().id,
+        next.id
+    );
+    assert_eq!(
+        bounded
+            .revoke_binding(
+                &scope("revoke-boundary"),
+                &RevokeBindingRequest {
+                    binding_id: next.id.clone()
+                }
+            )
+            .unwrap()
+            .status,
+        BindingStatus::Revoked
+    );
+    assert_eq!(
+        bounded.read_binding(&next_scope, &next.id).unwrap().status,
+        BindingStatus::Revoked
+    );
+}

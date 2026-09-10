@@ -78,7 +78,21 @@ impl SqliteApplicationStore {
         request: &RevokeBindingRequest,
     ) -> Result<BindingView> {
         scope.validate()?;
-        let view = self.binding_view(scope, &request.binding_id)?;
+        let record: BindingRecord = self.read(
+            scope,
+            &request.binding_id,
+            "binding",
+            self.limits.max_output_bytes,
+        )?;
+        // Check the actual returned state before appending a transition, including
+        // records created under older admission rules or reopened with lower limits.
+        json(
+            &BindingView {
+                record: record.clone(),
+                status: BindingStatus::Revoked,
+            },
+            self.limits.max_output_bytes,
+        )?;
         let input = json(
             &("revoke", &scope.run_id, request),
             self.limits.max_input_bytes,
@@ -91,7 +105,7 @@ impl SqliteApplicationStore {
         if dedupe(
             &tx,
             scope,
-            &view.record.repository_id,
+            &record.repository_id,
             &input,
             self.limits.max_input_bytes,
         )?
@@ -110,7 +124,7 @@ impl SqliteApplicationStore {
                 now,
                 self.limits.max_output_bytes,
             )?;
-            tx.execute("INSERT INTO binding_requests(workspace,repository,request,input,binding_id) VALUES(?1,?2,?3,?4,?5)",params![scope.workspace_id,view.record.repository_id,scope.request_id,input,request.binding_id]).map_err(storage)?;
+            tx.execute("INSERT INTO binding_requests(workspace,repository,request,input,binding_id) VALUES(?1,?2,?3,?4,?5)",params![scope.workspace_id,record.repository_id,scope.request_id,input,request.binding_id]).map_err(storage)?;
         }
         tx.commit().map_err(storage)?;
         self.binding_view(scope, &request.binding_id)

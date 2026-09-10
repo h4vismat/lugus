@@ -148,7 +148,7 @@ impl ApplicationStore for SqliteApplicationStore {
         self.revoke(s, r)
     }
     fn prepare_binding(&self, s: &Scope, id: &str) -> Result<BindingRecord> {
-        let view = self.binding_view(s, id)?;
+        let view = self.binding_state(s, id)?;
         if view.status != BindingStatus::Active {
             return Err(error(ErrorKind::Conflict, "binding is no longer active"));
         }

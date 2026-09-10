@@ -94,7 +94,7 @@ impl SqliteApplicationStore {
             &input,
             self.limits.max_input_bytes,
         )? {
-            return Ok(self.binding_view(scope, &id)?.record);
+            return self.read(scope, &id, "binding", self.limits.max_output_bytes);
         }
         let header = self.dataset_header(scope, &request.company_dataset_id)?;
         if header.kind != DatasetKind::Resolution
@@ -172,11 +172,13 @@ impl SqliteApplicationStore {
         let previous = request
             .supersedes
             .as_ref()
-            .map(|id| self.binding_view(scope, id))
+            .map(|id| {
+                self.read::<BindingRecord>(scope, id, "binding", self.limits.max_output_bytes)
+            })
             .transpose()?;
         if previous.as_ref().is_some_and(|b| {
-            b.record.company.company != company.company
-                || b.record.company.candidate.identifier != company.candidate.identifier
+            b.company.company != company.company
+                || b.company.candidate.identifier != company.candidate.identifier
         }) {
             return Err(conflict());
         }
@@ -195,13 +197,38 @@ impl SqliteApplicationStore {
             created_at: self.clock.now(),
         };
         let payload = json(&record, self.limits.max_output_bytes)?;
+        // Superseded is the largest supported status. Valid IDs contain no control
+        // characters: a backslash uses the maximum two JSON bytes per input byte.
+        // Reserve the full public view with a maximum-length future revision ID.
+        json(
+            &BindingView {
+                record: record.clone(),
+                status: BindingStatus::Superseded {
+                    binding_id: "\\".repeat(Scope::MAX_ID_BYTES),
+                },
+            },
+            self.limits.max_output_bytes,
+        )?;
+        if let Some(previous) = previous {
+            // Existing records may predate admission reserves or be reopened with
+            // tighter limits. Do not append a status this store cannot return.
+            json(
+                &BindingView {
+                    record: previous,
+                    status: BindingStatus::Superseded {
+                        binding_id: record.id.clone(),
+                    },
+                },
+                self.limits.max_output_bytes,
+            )?;
+        }
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(storage)?;
         if let Some(id) = dedupe(&tx, scope, &repository, &input, self.limits.max_input_bytes)? {
             tx.commit().map_err(storage)?;
-            return Ok(self.binding_view(scope, &id)?.record);
+            return self.read(scope, &id, "binding", self.limits.max_output_bytes);
         }
         if let Some(old) = &request.supersedes {
             if event(&tx, old, self.limits.max_output_bytes)?.status != BindingStatus::Active {
@@ -264,13 +291,16 @@ impl SqliteApplicationStore {
         }
         Ok(actual)
     }
-    pub(super) fn binding_view(&self, scope: &Scope, id: &str) -> Result<BindingView> {
+    pub(super) fn binding_state(&self, scope: &Scope, id: &str) -> Result<BindingView> {
         let record: BindingRecord =
             self.read(scope, id, "binding", self.limits.max_output_bytes)?;
         let tx = self.connection.unchecked_transaction().map_err(storage)?;
         let status = event(&tx, id, self.limits.max_output_bytes)?.status;
         tx.commit().map_err(storage)?;
-        let view = BindingView { record, status };
+        Ok(BindingView { record, status })
+    }
+    pub(super) fn binding_view(&self, scope: &Scope, id: &str) -> Result<BindingView> {
+        let view = self.binding_state(scope, id)?;
         json(&view, self.limits.max_output_bytes)?;
         Ok(view)
     }
