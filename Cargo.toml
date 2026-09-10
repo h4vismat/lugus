@@ -1,0 +1,3 @@
+[workspace]
+members = ["lugus-agent","lugus-financial"]
+resolver = "3"

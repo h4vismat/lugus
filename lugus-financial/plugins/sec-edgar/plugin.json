@@ -1,0 +1,7 @@
+{
+  "id": "sec-edgar",
+  "version": "0.1.0",
+  "protocol_version": 1,
+  "command": "python3",
+  "args": ["main.py"]
+}
