@@ -333,3 +333,187 @@ fn context_rejects_duplicate_message_identity_across_exchanges() {
         .is_err()
     );
 }
+
+fn selected_page() -> lugus_app::DatasetPage {
+    serde_json::from_value(serde_json::json!({
+        "header":{"id":"dataset-1","workspace_id":"workspace-1","repository_id":"repo-1","provider":{"instance_id":"fixture","plugin_id":"fixture","plugin_version":"1"},"fetch_id":"fetch-1","kind":"filings","projection":{"kind":"filings","run_id":1},"query":{},"created_at":"1970-01-01T00:00:00Z","row_count":3,"limitations":[],"conflicts":[]},
+        "rows":[],"next_offset":0
+    })).unwrap()
+}
+
+fn selected_binding() -> lugus_app::BindingRecord {
+    let provider =
+        serde_json::json!({"instance_id":"fixture","plugin_id":"fixture","plugin_version":"1"});
+    let instrument = serde_json::json!({"namespace":"fixture:symbol","value":"AAPL"});
+    serde_json::from_value(serde_json::json!({
+        "id":"binding-1","scope":{"workspace_id":"workspace-1","request_id":"req-1","run_id":"run-1"},"repository_id":"repo-1","company_dataset_id":"company-1",
+        "company":{"company":1,"candidate":{"identifier":{"namespace":"cik","value":"320193"},"name":"Apple","aliases":[],"listings":[],"source_url":"https://example.test/company","source_checksum":"abc","retrieved_at":"1970-01-01T00:00:00Z","match_reasons":[]},"provider":provider,"run_id":1,"observation_id":1,"recorded_at":"1970-01-01T00:00:00Z"},
+        "listing":{"ticker":instrument,"exchange":null},"instrument_fetch_id":"fetch-1",
+        "instrument":{"id":1,"provider":provider,"request":{"instrument":instrument},"metadata":{"instrument":instrument,"issuer_name":"Apple","ticker":"AAPL","exchange":null,"kind":"equity","issuer_identifiers":[],"source_url":"https://example.test/instrument","source_checksum":"def","retrieved_at":"1970-01-01T00:00:00Z"},"recorded_at":"1970-01-01T00:00:00Z"},
+        "policy":"instrument-binding-v1","reasons":[],"supersedes":null,"created_at":"1970-01-01T00:00:00Z"
+    })).unwrap()
+}
+
+fn replace_frozen_payload(frozen: &mut FrozenReference, payload: serde_json::Value) {
+    use sha2::{Digest, Sha256};
+    frozen.serialized = serde_json::to_string(&payload).unwrap();
+    frozen.checksum = format!("{:x}", Sha256::digest(frozen.serialized.as_bytes()));
+}
+
+#[test]
+fn restored_dataset_obeys_current_page_limits() {
+    let limits = ConversationLimits::default();
+    let page = selected_page();
+    let frozen = FrozenReference::from_dataset(&page, &limits).unwrap();
+    let smaller = ConversationLimits {
+        page_bytes: 1,
+        ..limits.clone()
+    };
+    assert!(FrozenReference::from_dataset(&page, &smaller).is_err());
+    assert!(frozen.validate(&smaller).is_err());
+    let binding = selected_binding();
+    let page = lugus_app::DatasetPage {
+        rows: vec![
+            lugus_app::DatasetRow::Candidate {
+                entry: binding.company.clone(),
+            },
+            lugus_app::DatasetRow::Candidate {
+                entry: binding.company,
+            },
+        ],
+        next_offset: Some(2),
+        ..page
+    };
+    let frozen = FrozenReference::from_dataset(&page, &limits).unwrap();
+    let smaller = ConversationLimits {
+        page_items: 1,
+        ..limits.clone()
+    };
+    assert!(FrozenReference::from_dataset(&page, &smaller).is_err());
+    assert!(frozen.validate(&smaller).is_err());
+    let invalid = ConversationLimits {
+        runtime_close_timeout_ms: 0,
+        ..limits
+    };
+    assert!(frozen.validate(&invalid).is_err());
+}
+
+#[test]
+fn restored_dataset_rejects_inconsistent_first_page_and_coverage() {
+    let limits = ConversationLimits::default();
+    let original = FrozenReference::from_dataset(&selected_page(), &limits).unwrap();
+    for (pointer, replacement) in [
+        ("/coverage/offset", serde_json::json!(10)),
+        ("/coverage/returned_rows", serde_json::json!(1)),
+        ("/coverage/total_rows", serde_json::json!(4)),
+        ("/coverage/next_offset", serde_json::json!(null)),
+        ("/coverage/complete", serde_json::json!(true)),
+        ("/page/next_offset", serde_json::json!(2)),
+        (
+            "/page/header/workspace_id",
+            serde_json::json!("bad\nworkspace"),
+        ),
+    ] {
+        let mut frozen = original.clone();
+        let mut payload: serde_json::Value = serde_json::from_str(&frozen.serialized).unwrap();
+        *payload.pointer_mut(pointer).unwrap() = replacement;
+        replace_frozen_payload(&mut frozen, payload);
+        assert!(
+            frozen.validate(&limits).is_err(),
+            "accepted invalid {pointer}"
+        );
+    }
+}
+
+#[test]
+fn restored_dataset_rejects_unknown_nested_fields_without_changing_legacy_dtos() {
+    let limits = ConversationLimits::default();
+    let page = selected_page();
+    let original = FrozenReference::from_dataset(&page, &limits).unwrap();
+    for pointer in ["/page", "/page/header", "/page/header/provider"] {
+        let mut frozen = original.clone();
+        let mut payload: serde_json::Value = serde_json::from_str(&frozen.serialized).unwrap();
+        payload.pointer_mut(pointer).unwrap()["mutable_status"] = "latest".into();
+        // Compatibility stays permissive for callers of the preexisting DTOs.
+        assert!(serde_json::from_value::<lugus_app::DatasetPage>(payload["page"].clone()).is_ok());
+        replace_frozen_payload(&mut frozen, payload);
+        assert!(
+            frozen.validate(&limits).is_err(),
+            "accepted extra field at {pointer}"
+        );
+    }
+}
+
+#[test]
+fn restored_binding_rechecks_scope_and_rejects_unknown_nested_fields() {
+    let limits = ConversationLimits::default();
+    let binding = selected_binding();
+    let original = FrozenReference::from_binding(&binding, &limits).unwrap();
+    assert!(original.validate(&limits).is_ok());
+    for pointer in ["", "/company", "/company/provider", "/listing/ticker"] {
+        let mut frozen = original.clone();
+        let mut payload: serde_json::Value = serde_json::from_str(&frozen.serialized).unwrap();
+        payload.pointer_mut(pointer).unwrap()["mutable_status"] = "active".into();
+        assert!(serde_json::from_value::<lugus_app::BindingRecord>(payload.clone()).is_ok());
+        replace_frozen_payload(&mut frozen, payload);
+        assert!(
+            frozen.validate(&limits).is_err(),
+            "accepted extra field at {pointer}"
+        );
+    }
+    for pointer in ["/repository_id", "/scope/workspace_id", "/scope/request_id"] {
+        let mut frozen = original.clone();
+        let mut payload: serde_json::Value = serde_json::from_str(&frozen.serialized).unwrap();
+        *payload.pointer_mut(pointer).unwrap() = "bad\nid".into();
+        replace_frozen_payload(&mut frozen, payload);
+        assert!(
+            frozen.validate(&limits).is_err(),
+            "accepted invalid {pointer}"
+        );
+    }
+}
+
+#[test]
+fn restored_view_rechecks_bounded_descriptor_ids() {
+    let limits = ConversationLimits::default();
+    let view = lugus_app::ViewReceipt {
+        id: "v".into(),
+        workspace_id: "w".into(),
+        request_id: "req".into(),
+        dataset_id: "d".into(),
+        kind: lugus_app::ViewKind::DataTable,
+        descriptor_revision: 1,
+        accepted_at: Utc.timestamp_opt(0, 0).unwrap(),
+        presentation: None,
+    };
+    let original = FrozenReference::from_view(&view, &limits).unwrap();
+    for (field, value) in [
+        ("workspace_id", "bad\nid".to_string()),
+        ("dataset_id", "x".repeat(257)),
+    ] {
+        let mut frozen = original.clone();
+        let mut payload: serde_json::Value = serde_json::from_str(&frozen.serialized).unwrap();
+        payload[field] = value.into();
+        replace_frozen_payload(&mut frozen, payload);
+        assert!(
+            frozen.validate(&limits).is_err(),
+            "accepted invalid {field}"
+        );
+    }
+}
+
+#[test]
+fn frozen_shape_check_preserves_opaque_data_and_json_formatting() {
+    use sha2::{Digest, Sha256};
+    let limits = ConversationLimits::default();
+    let mut page = selected_page();
+    page.header.query = serde_json::json!({"provider_specific":{"mutable_status":"source data","extra":[1,"日本語\n"]}});
+    let mut frozen = FrozenReference::from_dataset(&page, &limits).unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&frozen.serialized).unwrap();
+    frozen.serialized = serde_json::to_string_pretty(&payload).unwrap();
+    frozen.checksum = format!("{:x}", Sha256::digest(frozen.serialized.as_bytes()));
+    assert!(frozen.validate(&limits).is_ok());
+    let snapshot =
+        build_context(&new_message(), &[], std::slice::from_ref(&frozen), &limits).unwrap();
+    assert_eq!(snapshot.references[0].serialized, frozen.serialized);
+}
