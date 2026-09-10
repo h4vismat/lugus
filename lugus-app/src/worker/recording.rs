@@ -31,6 +31,7 @@ pub(super) struct Recording<'a> {
     pub read_limits: ReadLimits,
     pub read_limited: Cell<bool>,
     pub finalization_failed: Cell<bool>,
+    pub protocol_failed: bool,
 }
 impl Repository for Recording<'_> {
     fn start_run(
@@ -58,6 +59,8 @@ impl Repository for Recording<'_> {
         self.inner.save_facts_page(run, page, mapper)
     }
     fn finish_run(&mut self, run: i64, error: Option<&Error>) -> Result<()> {
+        self.protocol_failed |=
+            error.is_some_and(|error| error.kind == lugus_financial::error::ErrorKind::Protocol);
         let result = self.inner.finish_run(run, error);
         self.finalization_failed.set(result.is_err());
         result
@@ -98,6 +101,8 @@ impl MarketRepository for Recording<'_> {
         self.inner.save_prices_page(run, page)
     }
     fn finish_market_run(&mut self, run: i64, error: Option<&Error>) -> Result<()> {
+        self.protocol_failed |=
+            error.is_some_and(|error| error.kind == lugus_financial::error::ErrorKind::Protocol);
         let result = self.inner.finish_market_run(run, error);
         self.finalization_failed.set(result.is_err());
         result
@@ -140,6 +145,7 @@ impl CatalogRepository for Recording<'_> {
         result
     }
     fn fail_resolution_run_with_error(&mut self, run: i64, error: &Error) -> Result<()> {
+        self.protocol_failed |= error.kind == lugus_financial::error::ErrorKind::Protocol;
         let result = self.inner.fail_resolution_run_with_error(run, error);
         self.finalization_failed.set(result.is_err());
         result

@@ -611,3 +611,97 @@ async fn rejected_finalization_is_storage_failure_even_without_sql_error() {
     reaped(&h.barrier);
     h.worker.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn ingestion_protocol_error_reaps_provider_and_retains_committed_page() {
+    let h = Harness::start("repeated_cursor", Limits::default()).await;
+    let job = h.submit(command("fixture")).unwrap();
+    barrier(&h.barrier, "second").await;
+    std::fs::write(h.barrier.join("release"), "").unwrap();
+    let result = job.wait().await.unwrap();
+    let available = h.catalog.lock().unwrap().get("fixture").unwrap().available;
+    let FetchCommand::Facts { query, .. } = command("fixture") else {
+        unreachable!()
+    };
+    let snapshot = SqliteRepository::open(&h.db)
+        .unwrap()
+        .snapshot(&result.provenance.provider, &query)
+        .unwrap();
+    assert_eq!(result.error.unwrap().kind, ErrorKind::Unavailable);
+    assert_eq!(snapshot.facts.len(), 1);
+    assert_eq!(snapshot.runs[0].status, RunStatus::Failed);
+    assert_eq!(snapshot.runs[0].id, result.provenance.runs[0].id);
+    // Check the process before shutdown, but always clean up even on the RED path.
+    let pid = std::fs::read_to_string(h.barrier.join("pid")).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    h.worker.shutdown().await.unwrap();
+    assert!(!available, "protocol-violating provider remained available");
+    assert!(
+        !alive,
+        "protocol-violating child was not reaped before the result"
+    );
+}
+
+#[tokio::test]
+async fn ingestion_protocol_error_reaps_even_when_finalization_fails() {
+    let h = Harness::start("repeated_cursor", Limits::default()).await;
+    let job = h.submit(command("fixture")).unwrap();
+    barrier(&h.barrier, "second").await;
+    let output = std::process::Command::new("python3")
+        .args(["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"CREATE TRIGGER reject_finish BEFORE UPDATE ON runs BEGIN SELECT RAISE(FAIL, 'storage failure'); END\"); c.commit()"])
+        .arg(&h.db).output().unwrap();
+    assert!(output.status.success());
+    std::fs::write(h.barrier.join("release"), "").unwrap();
+    let result = job.wait().await.unwrap();
+    let available = h.catalog.lock().unwrap().get("fixture").unwrap().available;
+    assert_eq!(result.error.unwrap().kind, ErrorKind::Storage);
+    assert_eq!(result.provenance.runs.len(), 1);
+    let pid = std::fs::read_to_string(h.barrier.join("pid")).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    h.worker.shutdown().await.unwrap();
+    assert!(
+        !available,
+        "finalization failure hid required protocol invalidation"
+    );
+    assert!(!alive, "finalization failure prevented explicit reaping");
+}
+
+#[tokio::test]
+async fn ingestion_market_protocol_error_reaps_before_returning() {
+    let h = Harness::start("market_repeated_date", Limits::default()).await;
+    let job = h.submit(FetchCommand::Prices { instance_id: "fixture".into(), query: serde_json::from_value(json!({
+        "instrument":{"namespace":"fixture:symbol","value":"AAPL"}, "start":"2024-01-01", "end":"2024-12-31", "page_size":10
+    })).unwrap() }).unwrap();
+    barrier(&h.barrier, "second").await;
+    std::fs::write(h.barrier.join("release"), "").unwrap();
+    let result = job.wait().await.unwrap();
+    let available = h.catalog.lock().unwrap().get("fixture").unwrap().available;
+    assert_eq!(result.error.unwrap().kind, ErrorKind::Unavailable);
+    assert_eq!(result.provenance.runs[0].kind, RunKind::Market);
+    let pid = std::fs::read_to_string(h.barrier.join("pid")).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    h.worker.shutdown().await.unwrap();
+    assert!(
+        !available,
+        "cross-page market protocol violation remained available"
+    );
+    assert!(!alive, "market child was not reaped before terminal result");
+}
+
+#[path = "worker/startup_cleanup.rs"]
+mod startup_cleanup;

@@ -217,7 +217,7 @@ impl WorkerHandle {
                             let generation = match registration {
                                 Ok(generation) => generation,
                                 Err(error) => {
-                                    let _ = provider.close().await;
+                                    provider.close().await.map_err(AppError::from)?;
                                     return Err(error);
                                 }
                             };
@@ -487,6 +487,7 @@ async fn execute_job(
         },
         read_limited: std::cell::Cell::new(false),
         finalization_failed: std::cell::Cell::new(false),
+        protocol_failed: false,
     };
     let mut bounded = BoundedProvider {
         inner: provider,
@@ -499,6 +500,11 @@ async fn execute_job(
         limits,
     )
     .await;
+    // Finalization may replace a protocol error with a storage error; cleanup is still required.
+    let protocol_failed = recording.protocol_failed
+        || outcome
+            .as_ref()
+            .is_err_and(|error| error.kind == lugus_financial::error::ErrorKind::Protocol);
     // Only wrapper-caused errors are cancellation/resource failures. Storage finalization errors win.
     let mut error = match outcome {
         Ok(()) => None,
@@ -528,7 +534,7 @@ async fn execute_job(
         .into_iter()
         .chain(bounded.budget.cause.as_ref())
         .any(|e| matches!(e.kind, ErrorKind::Cancelled | ErrorKind::Timeout));
-    if interrupted || !bounded.inner.is_running() {
+    if protocol_failed || interrupted || !bounded.inner.is_running() {
         let closed = bounded.inner.close().await;
         mark_unavailable(catalog, bounded.inner.identity(), job.generation);
         if let Err(close_error) = closed

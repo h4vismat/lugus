@@ -21,7 +21,7 @@ for line in sys.stdin:
     else:
         cursor = params.get('cursor')
         (root / ('second' if cursor else 'first')).touch()
-        if mode == 'blocked' or (mode == 'second_blocked' and cursor):
+        if mode == 'blocked' or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
             while not (root / 'release').exists():
                 time.sleep(0.005)
         if mode == 'protocol':
@@ -37,6 +37,8 @@ for line in sys.stdin:
             result = {'identifier': params['identifier'], 'name': 'Fixture', 'aliases': [], 'listings': [], 'source_url': 'https://example.test/company', 'source_checksum': 'a' * 64, 'retrieved_at': '2026-09-09T00:00:00Z', 'match_reasons': []}
         elif method == 'market_data.daily':
             result = {'items': [{'instrument': params['instrument'], 'date': '2024-01-02', 'open': '100', 'high': '102', 'low': '99', 'close': '101', 'volume': 123, 'adjusted_close': '100.5', 'currency': 'USD', 'exchange_timezone': 'America/New_York', 'price_basis': 'source_reported', 'precision': 'decimal_source', 'source_url': 'https://example.test/history', 'retrieved_at': '2026-09-09T00:00:00Z'}], 'next_cursor': None, 'coverage': {'first_date': '2024-01-02', 'last_date': '2024-01-02', 'completeness': 'unverified'}}
+            if mode == 'market_repeated_date' and not cursor:
+                result['next_cursor'] = 'page-two'
         elif method == 'filings.document':
             result = {'source_url': params['source_url'], 'media_type': 'text/plain', 'content_base64': base64.b64encode(b'fixture document').decode(), 'retrieved_at': '2026-09-09T00:00:00Z'}
         elif method in ('filings.list', 'fundamentals.facts'):
@@ -46,6 +48,8 @@ for line in sys.stdin:
             else:
                 result['items'] = [dict(common, namespace='us-gaap', concept='Assets', label=None, value='12345678901234567890.001', unit='USD', period={'kind':'instant','date':'2023-12-31'}, fiscal_year=2023, fiscal_period='FY')]
             if mode in ('second_blocked', 'two_pages') and not cursor:
+                result['next_cursor'] = 'page-two'
+            if mode == 'repeated_cursor':
                 result['next_cursor'] = 'page-two'
             if mode == 'many_items':
                 result['items'] *= 3
