@@ -31,8 +31,7 @@ pub struct ProviderState {
     pub generation: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OfferedOperation {
     pub identity: ProviderIdentity,
     pub capability: String,
@@ -41,8 +40,7 @@ pub struct OfferedOperation {
     pub generation: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Offering {
     pub revision: u64,
     operations: Vec<OfferedOperation>,
@@ -218,6 +216,13 @@ impl Catalog {
                 false,
             )
         })?;
+        if (offered.capability.as_str(), offered.version) != operation.capability() {
+            return Err(AppError::new(
+                ErrorKind::Unsupported,
+                "offering capability does not match the operation",
+                false,
+            ));
+        }
         let current = self.provider(instance_id)?;
         if current.generation != offered.generation || current.identity != offered.identity {
             return Err(AppError::new(
@@ -328,5 +333,52 @@ fn validate_capabilities(capabilities: &BTreeMap<String, u32>) -> Result<()> {
             "invalid provider capabilities",
             false,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn authorization_rejects_an_operation_with_mismatched_capability_metadata() {
+        let identity = ProviderIdentity {
+            instance_id: "provider-a".into(),
+            plugin_id: "fixture".into(),
+            plugin_version: "1".into(),
+        };
+        let catalog = Catalog::new(vec![ProviderEntry {
+            identity: identity.clone(),
+            active: true,
+            available: true,
+            capabilities: BTreeMap::from([("filings".into(), 1)]),
+        }])
+        .unwrap();
+        let forged = Offering {
+            revision: catalog.revision(),
+            operations: vec![OfferedOperation {
+                identity,
+                capability: "filings".into(),
+                version: 1,
+                operation: Operation::Prices,
+                generation: 1,
+            }],
+        };
+        let command: FetchCommand = serde_json::from_value(json!({
+            "operation": "prices",
+            "instance_id": "provider-a",
+            "query": {
+                "instrument": {"namespace": "native:symbol", "value": "ACME"},
+                "start": "2025-01-01", "end": "2025-01-02",
+                "cursor": null, "page_size": 100
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            catalog.authorize(&forged, &command).unwrap_err().kind,
+            ErrorKind::Unsupported
+        );
     }
 }

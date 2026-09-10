@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
@@ -21,8 +21,7 @@ pub enum ErrorKind {
     Timeout,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{kind:?}: {message}")]
 pub struct AppError {
     pub kind: ErrorKind,
@@ -33,11 +32,13 @@ pub struct AppError {
 
 impl AppError {
     pub const MAX_MESSAGE_BYTES: usize = 1024;
+    pub const MAX_SERIALIZED_JSON_BYTES: usize = Self::MAX_MESSAGE_BYTES * 2 + 256;
 
     pub fn new(kind: ErrorKind, message: impl Into<String>, retryable: bool) -> Self {
+        let message = message.into();
         Self {
             kind,
-            message: bounded_message(message.into()),
+            message: bounded_message(&message),
             retryable,
             retry_after_seconds: None,
         }
@@ -49,25 +50,59 @@ impl AppError {
     }
 }
 
-fn bounded_message(message: String) -> String {
-    let sanitized = message
-        .chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect::<String>();
-    if sanitized.len() <= AppError::MAX_MESSAGE_BYTES {
-        return sanitized;
+fn bounded_message(message: &str) -> String {
+    let mut bounded = String::with_capacity(message.len().min(AppError::MAX_MESSAGE_BYTES));
+    for character in message.chars() {
+        let character = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        if bounded.len() + character.len_utf8() > AppError::MAX_MESSAGE_BYTES {
+            break;
+        }
+        bounded.push(character);
     }
-    let mut end = AppError::MAX_MESSAGE_BYTES;
-    while !sanitized.is_char_boundary(end) {
-        end -= 1;
+    bounded
+}
+
+#[derive(Serialize)]
+struct AppErrorRef<'a> {
+    kind: ErrorKind,
+    message: &'a str,
+    retryable: bool,
+    retry_after_seconds: Option<u64>,
+}
+
+impl Serialize for AppError {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let message = bounded_message(&self.message);
+        AppErrorRef {
+            kind: self.kind,
+            message: &message,
+            retryable: self.retryable,
+            retry_after_seconds: self.retry_after_seconds,
+        }
+        .serialize(serializer)
     }
-    sanitized[..end].to_owned()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppErrorWire {
+    kind: ErrorKind,
+    message: String,
+    retryable: bool,
+    retry_after_seconds: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for AppError {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let wire = AppErrorWire::deserialize(deserializer)?;
+        let mut error = Self::new(wire.kind, wire.message, wire.retryable);
+        error.retry_after_seconds = wire.retry_after_seconds;
+        Ok(error)
+    }
 }
 
 impl From<lugus_financial::error::Error> for AppError {

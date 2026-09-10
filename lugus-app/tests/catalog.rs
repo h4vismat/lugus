@@ -2,6 +2,7 @@ use lugus_app::{
     AppError, Catalog, ErrorKind, FetchCommand, Limits, Operation, ProviderEntry, Scope,
 };
 use lugus_financial::domain::ProviderIdentity;
+use lugus_financial::{domain::CompanyId, market_data::InstrumentId};
 use serde_json::json;
 use std::{collections::BTreeMap, time::Duration};
 
@@ -411,4 +412,132 @@ fn application_errors_bound_safe_messages() {
     assert!(error.message.is_char_boundary(error.message.len()));
     assert!(error.retryable);
     assert_eq!(error.retry_after_seconds, None);
+}
+
+#[test]
+fn nested_company_identifiers_are_bounded_for_filings_and_facts() {
+    let command: FetchCommand = serde_json::from_value(json!({
+        "operation": "filings",
+        "instance_id": "sec-a",
+        "query": {
+            "company": {"namespace": "sec:cik", "value": "0000000001"},
+            "filed_from": "2025-01-01", "filed_to": "2025-01-02",
+            "forms": [], "cursor": null, "page_size": 100
+        }
+    }))
+    .unwrap();
+    let FetchCommand::Filings { query, .. } = command else {
+        unreachable!()
+    };
+    let invalid_ids = [
+        CompanyId {
+            namespace: "x".repeat(129),
+            value: "value".into(),
+        },
+        CompanyId {
+            namespace: "namespace".into(),
+            value: "x".repeat(129),
+        },
+        CompanyId {
+            namespace: "bad\nnamespace".into(),
+            value: "value".into(),
+        },
+        CompanyId {
+            namespace: "namespace".into(),
+            value: "bad\tvalue".into(),
+        },
+    ];
+
+    for company in invalid_ids {
+        for command in [
+            FetchCommand::Filings {
+                instance_id: "sec-a".into(),
+                query: lugus_app::Query {
+                    company: company.clone(),
+                    ..query.clone()
+                },
+            },
+            FetchCommand::Facts {
+                instance_id: "sec-a".into(),
+                query: lugus_app::Query {
+                    company: company.clone(),
+                    ..query.clone()
+                },
+            },
+        ] {
+            assert_eq!(
+                command.validate().unwrap_err().kind,
+                ErrorKind::InvalidInput
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_market_identifiers_are_bounded_for_prices() {
+    let command = prices("market-a");
+    let FetchCommand::Prices { query, .. } = command else {
+        unreachable!()
+    };
+    let invalid_ids = [
+        InstrumentId {
+            namespace: "x".repeat(129),
+            value: "value".into(),
+        },
+        InstrumentId {
+            namespace: "namespace".into(),
+            value: "x".repeat(129),
+        },
+        InstrumentId {
+            namespace: "bad\nnamespace".into(),
+            value: "value".into(),
+        },
+        InstrumentId {
+            namespace: "namespace".into(),
+            value: "bad\tvalue".into(),
+        },
+    ];
+
+    for instrument in invalid_ids {
+        let command = FetchCommand::Prices {
+            instance_id: "market-a".into(),
+            query: lugus_app::PriceQuery {
+                instrument,
+                ..query.clone()
+            },
+        };
+        assert_eq!(
+            command.validate().unwrap_err().kind,
+            ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
+fn error_serialization_bounds_even_publicly_mutated_messages() {
+    let error = AppError {
+        kind: ErrorKind::Unavailable,
+        message: "\\\"\n".repeat(AppError::MAX_MESSAGE_BYTES),
+        retryable: true,
+        retry_after_seconds: Some(u64::MAX),
+    };
+    let encoded = serde_json::to_vec(&error).unwrap();
+    assert!(encoded.len() <= Limits::MIN_OUTPUT_BYTES);
+    let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    let message = value["message"].as_str().unwrap();
+    assert!(message.len() <= AppError::MAX_MESSAGE_BYTES);
+    assert!(!message.chars().any(char::is_control));
+}
+
+#[test]
+fn error_deserialization_restores_the_safe_message_invariant() {
+    let error: AppError = serde_json::from_value(json!({
+        "kind": "unavailable",
+        "message": "bad\n\\\"".repeat(AppError::MAX_MESSAGE_BYTES),
+        "retryable": true,
+        "retry_after_seconds": null
+    }))
+    .unwrap();
+    assert!(error.message.len() <= AppError::MAX_MESSAGE_BYTES);
+    assert!(!error.message.chars().any(char::is_control));
 }

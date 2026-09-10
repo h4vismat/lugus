@@ -80,7 +80,7 @@ impl Limits {
     pub const MAX_PAGES_PER_FETCH: usize = 10_000;
     pub const MAX_ITEMS_PER_FETCH: usize = 10_000_000;
     pub const MAX_BYTES: usize = 1024 * 1024 * 1024;
-    pub const MIN_OUTPUT_BYTES: usize = AppError::MAX_MESSAGE_BYTES + 256;
+    pub const MIN_OUTPUT_BYTES: usize = AppError::MAX_SERIALIZED_JSON_BYTES;
 
     pub fn validate(&self) -> Result<()> {
         if (1..=Self::MAX_QUEUE_CAPACITY).contains(&self.queue_capacity)
@@ -159,6 +159,7 @@ pub enum FetchCommand {
 
 impl FetchCommand {
     pub const MAX_TEXT_BYTES: usize = 4096;
+    pub const MAX_IDENTIFIER_COMPONENT_BYTES: usize = 128;
 
     pub fn instance_id(&self) -> &str {
         match self {
@@ -194,6 +195,7 @@ impl FetchCommand {
             Self::Resolve { input, .. } => require_text(input, "invalid resolution input"),
             Self::Lookup { request, .. } => map_validation(request.validate()),
             Self::Filings { query, .. } | Self::Facts { query, .. } => {
+                validate_identifier(&query.company.namespace, &query.company.value)?;
                 map_validation(query.validate())?;
                 if query.cursor.is_some() {
                     return Err(invalid("root fetch query cannot contain a cursor"));
@@ -208,6 +210,7 @@ impl FetchCommand {
                 require_text(source_url, "invalid document source URL")
             }
             Self::Prices { query, .. } => {
+                validate_identifier(&query.instrument.namespace, &query.instrument.value)?;
                 map_validation(query.validate())?;
                 if query.cursor.is_some() {
                     Err(invalid("root price query cannot contain a cursor"))
@@ -216,6 +219,16 @@ impl FetchCommand {
                 }
             }
         }
+    }
+}
+
+fn validate_identifier(namespace: &str, value: &str) -> Result<()> {
+    if valid_text(namespace, FetchCommand::MAX_IDENTIFIER_COMPONENT_BYTES)
+        && valid_text(value, FetchCommand::MAX_IDENTIFIER_COMPONENT_BYTES)
+    {
+        Ok(())
+    } else {
+        Err(invalid("invalid provider-native identifier"))
     }
 }
 
