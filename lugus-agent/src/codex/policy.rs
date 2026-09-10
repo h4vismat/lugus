@@ -2,6 +2,44 @@ use serde_json::{Value, json};
 
 use crate::{Error, Result};
 
+/// Returns process-local CLI overrides for controls whose values do not
+/// depend on the effective MCP configuration. They affect this app-server
+/// process only and never write the user's configuration.
+pub(super) fn startup_args() -> Vec<String> {
+    let settings = [
+        "features.shell_tool=false",
+        "features.hooks=false",
+        "features.apps=false",
+        "features.plugins=false",
+        "features.browser_use=false",
+        "features.computer_use=false",
+        "features.image_generation=false",
+        "features.view_image=false",
+        "features.multi_agent=false",
+        "features.goals=false",
+        "features.sleep_tool=false",
+        "features.tool_suggest=false",
+        "features.skill_search=false",
+        "features.request_permissions_tool=false",
+        "tools.experimental_request_user_input.enabled=false",
+        "tools.update_plan.enabled=false",
+        "skills.include_instructions=false",
+        "skills.bundled.enabled=false",
+        "project_doc_max_bytes=0",
+        "developer_instructions=\"\"",
+        "web_search=\"live\"",
+        "approval_policy=\"never\"",
+        "sandbox_mode=\"read-only\"",
+    ];
+    let mut args = Vec::with_capacity(1 + settings.len() * 2);
+    args.push("app-server".into());
+    for setting in settings {
+        args.push("-c".into());
+        args.push(setting.into());
+    }
+    args
+}
+
 /// Builds the verified 0.153.4 session override used for unattended turns.
 /// The supplied names are derived in memory from `config/read`; no config
 /// layer or credential-bearing response is written or logged.

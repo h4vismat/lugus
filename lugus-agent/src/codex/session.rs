@@ -10,7 +10,7 @@ use super::events::{
     agent_text, last_agent_text, response_id_at, string_field, turn_error_message, validate_active,
     validate_completion,
 };
-use super::policy::{mcp_server_ids, unattended_config};
+use super::policy::{mcp_server_ids, startup_args, unattended_config};
 use super::process::{CodexProcess, TransportLimits};
 use super::protocol::{
     NotificationMethod, RequestMethod, ResponseOutcome, WireMessage, classify_message,
@@ -61,7 +61,6 @@ pub struct CodexRuntime {
     model_provider: Option<String>,
     next_request_id: u64,
     account_status: AccountStatus,
-    mcp_server_ids: Vec<String>,
 }
 
 impl fmt::Debug for CodexRuntime {
@@ -84,7 +83,7 @@ impl CodexRuntime {
 
         let process = CodexProcess::spawn(
             &config.executable,
-            &["app-server".into()],
+            &startup_args(),
             &config.workspace,
             TransportLimits::default(),
         )?;
@@ -95,7 +94,6 @@ impl CodexRuntime {
             model_provider: config.model_provider,
             next_request_id: 1,
             account_status: AccountStatus::LoginRequired,
-            mcp_server_ids: Vec::new(),
         };
 
         if let Err(error) = runtime.initialize().await {
@@ -122,13 +120,6 @@ impl CodexRuntime {
 
         let account = self.rpc("account/read", json!({})).await?;
         self.account_status = parse_account_status(&account)?;
-        let config = self
-            .rpc(
-                "config/read",
-                json!({"cwd": self.workspace, "includeLayers": false}),
-            )
-            .await?;
-        self.mcp_server_ids = mcp_server_ids(&config)?;
         Ok(())
     }
 
@@ -183,8 +174,13 @@ impl CodexRuntime {
             return Err(Error::AuthenticationRequired);
         }
 
+        let mcp_server_ids = self.current_mcp_server_ids().await?;
+
         let thread = self
-            .rpc("thread/start", self.thread_start_params(request))
+            .rpc(
+                "thread/start",
+                self.thread_start_params(request, &mcp_server_ids),
+            )
             .await?;
         let thread_id = response_id_at(&thread, &["thread", "id"], "thread/start")?;
 
@@ -227,7 +223,17 @@ impl CodexRuntime {
         .await
     }
 
-    fn thread_start_params(&self, request: &RunRequest) -> Value {
+    async fn current_mcp_server_ids(&mut self) -> Result<Vec<String>> {
+        let config = self
+            .rpc(
+                "config/read",
+                json!({"cwd": self.workspace, "includeLayers": false}),
+            )
+            .await?;
+        mcp_server_ids(&config)
+    }
+
+    fn thread_start_params(&self, request: &RunRequest, mcp_server_ids: &[String]) -> Value {
         let dynamic_tools: Vec<Value> = request
             .tools
             .iter()
@@ -248,7 +254,7 @@ impl CodexRuntime {
             "dynamicTools": dynamic_tools,
             "approvalPolicy": "never",
             "sandbox": "read-only",
-            "config": unattended_config(&self.mcp_server_ids),
+            "config": unattended_config(mcp_server_ids),
         });
         if let Some(model) = &self.model {
             params["model"] = json!(model);
@@ -512,13 +518,7 @@ impl CodexRuntime {
         thread_id: &str,
         turn_id: &str,
     ) -> Result<RunReport> {
-        // The fixture also verifies that cancellation is an explicit protocol
-        // action. Request ids need only be unique, so reserve the documented
-        // interrupt id without reusing an in-flight request id.
-        let id = self.next_request_id.max(8);
-        self.next_request_id = id
-            .checked_add(1)
-            .ok_or_else(|| Error::Protocol("client request id overflow".into()))?;
+        let id = self.take_request_id()?;
         let interrupt = json!({
             "id": id,
             "method": "turn/interrupt",
@@ -543,13 +543,8 @@ impl CodexRuntime {
                 }
             }
         };
-        let stopped = matches!(
-            tokio::time::timeout(INTERRUPT_GRACE, completed).await,
-            Ok(Ok(()))
-        );
-        if !stopped {
-            let _ = self.process.close().await;
-        }
+        let _ = tokio::time::timeout(INTERRUPT_GRACE, completed).await;
+        let _ = self.process.close().await;
 
         Ok(cancelled_report(request))
     }
@@ -566,6 +561,7 @@ impl AgentRuntime for CodexRuntime {
     ) -> Result<RunReport> {
         validate_request(&request)?;
         if *cancel.borrow() {
+            let _ = self.process.close().await;
             return Ok(cancelled_report(&request));
         }
         let deadline = tokio::time::Instant::now() + request.limits.timeout;
@@ -586,6 +582,10 @@ impl AgentRuntime for CodexRuntime {
             Err(error) => {
                 let _ = self.process.close().await;
                 Err(error)
+            }
+            Ok(report) if report.outcome == RunOutcome::Cancelled => {
+                let _ = self.process.close().await;
+                Ok(report)
             }
             Ok(report) => Ok(report),
         }

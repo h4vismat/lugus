@@ -57,6 +57,33 @@ def validate_client_request(message, expected_id, method):
 
 
 def serve_session():
+    expected_startup_args = [
+        "-c", "features.shell_tool=false",
+        "-c", "features.hooks=false",
+        "-c", "features.apps=false",
+        "-c", "features.plugins=false",
+        "-c", "features.browser_use=false",
+        "-c", "features.computer_use=false",
+        "-c", "features.image_generation=false",
+        "-c", "features.view_image=false",
+        "-c", "features.multi_agent=false",
+        "-c", "features.goals=false",
+        "-c", "features.sleep_tool=false",
+        "-c", "features.tool_suggest=false",
+        "-c", "features.skill_search=false",
+        "-c", "features.request_permissions_tool=false",
+        "-c", "tools.experimental_request_user_input.enabled=false",
+        "-c", "tools.update_plan.enabled=false",
+        "-c", "skills.include_instructions=false",
+        "-c", "skills.bundled.enabled=false",
+        "-c", "project_doc_max_bytes=0",
+        "-c", 'developer_instructions=""',
+        "-c", 'web_search="live"',
+        "-c", 'approval_policy="never"',
+        "-c", 'sandbox_mode="read-only"',
+    ]
+    if sys.argv[2:] != expected_startup_args:
+        sys.exit(1)
     initialize = read_message()
     expected_initialize = {
         "id": 1,
@@ -78,6 +105,7 @@ def serve_session():
 
     next_id = 2
     thread_index = 0
+    config_reads = 0
     while True:
         message = read_message()
         if message.get("method") == "account/read":
@@ -96,11 +124,14 @@ def serve_session():
         if message.get("method") == "config/read":
             validate_client_request(message, next_id, "config/read")
             next_id += 1
+            config_reads += 1
             if message.get("params") != {"cwd": os.getcwd(), "includeLayers": False}:
                 sys.exit(1)
             config = {"mcp_servers": {"inherited": {"command": "unused"}}}
             if scenario == "malformed_config":
                 config = {"mcp_servers": []}
+            elif scenario == "refresh_config" and config_reads == 2:
+                config = {"mcp_servers": {"newly_inherited": {"command": "unused"}}}
             rpc_result(message, {"config": config, "origins": {}})
             continue
 
@@ -123,6 +154,9 @@ def serve_session():
                 "required": ["thesis_id"], "additionalProperties": False,
             },
         }
+        expected_mcp_servers = {"inherited": {"enabled": False}}
+        if scenario == "refresh_config" and thread_index == 2:
+            expected_mcp_servers = {"newly_inherited": {"enabled": False}}
         expected_config = {
             "features": {"shell_tool": False, "hooks": False, "apps": False, "plugins": False,
                          "browser_use": False, "computer_use": False, "image_generation": False,
@@ -131,7 +165,7 @@ def serve_session():
             "tools": {"experimental_request_user_input": {"enabled": False}, "update_plan": {"enabled": False}},
             "skills": {"include_instructions": False, "bundled": {"enabled": False}},
             "project_doc_max_bytes": 0, "developer_instructions": "", "web_search": "live",
-            "mcp_servers": {"inherited": {"enabled": False}},
+            "mcp_servers": expected_mcp_servers,
         }
         if params.get("cwd") != os.getcwd() or params.get("baseInstructions") != "You are the Lugus review agent." or params.get("developerInstructions") != "Use only the supplied thesis context." or tools != [expected_tool] or params.get("approvalPolicy") != "never" or params.get("sandbox") != "read-only" or params.get("config") != expected_config:
             send({"id": message["id"], "error": {"code": -32602, "message": "invalid thread settings"}})
@@ -158,8 +192,9 @@ def serve_session():
 
         if scenario == "interruptible":
             interrupt = read_message()
-            if interrupt != {"id": 8, "method": "turn/interrupt", "params": {"threadId": thread_id, "turnId": turn_id}}:
+            if interrupt.get("id") != next_id or interrupt.get("method") != "turn/interrupt" or interrupt.get("params") != {"threadId": thread_id, "turnId": turn_id}:
                 sys.exit(1)
+            next_id += 1
             rpc_result(interrupt, {})
             send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "interrupted", [])}})
             continue

@@ -132,6 +132,23 @@ async fn run(
     (report, captured)
 }
 
+async fn assert_runtime_was_reaped(runtime: &mut CodexRuntime) {
+    let (events, _received) = mpsc::channel(1);
+    let (_cancel_tx, cancel) = watch::channel(false);
+    let result = timeout(
+        Duration::from_millis(100),
+        runtime.run(
+            request("run-after-cancellation"),
+            &RecallExecutor::default(),
+            events,
+            cancel,
+        ),
+    )
+    .await
+    .expect("a reaped runtime rejects a new run immediately");
+    assert!(matches!(result, Err(Error::Process(_))));
+}
+
 #[tokio::test]
 async fn initializes_dispatches_a_host_tool_and_completes_with_final_text() {
     let executable = FakeExecutable::for_scenario("normal");
@@ -338,6 +355,7 @@ async fn cancellation_before_startup_returns_a_cancelled_report() {
 
     assert_eq!(report.outcome, RunOutcome::Cancelled);
     drop(cancel_tx);
+    assert_runtime_was_reaped(&mut runtime).await;
     runtime.close().await.unwrap();
 }
 
@@ -366,7 +384,35 @@ async fn cancellation_interrupts_an_active_turn_and_reaps_the_process() {
     };
 
     assert_eq!(report.outcome, RunOutcome::Cancelled);
+    assert_runtime_was_reaped(&mut runtime).await;
     runtime.close().await.unwrap();
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn refreshes_inherited_mcp_ids_before_each_thread_start() {
+    let executable = FakeExecutable::for_scenario("refresh_config");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let executor = RecallExecutor::default();
+
+    assert_eq!(
+        run(&mut runtime, request("run-refresh-one"), &executor)
+            .await
+            .0
+            .unwrap()
+            .outcome,
+        RunOutcome::Completed,
+    );
+    assert_eq!(
+        run(&mut runtime, request("run-refresh-two"), &executor)
+            .await
+            .0
+            .unwrap()
+            .outcome,
+        RunOutcome::Completed,
+    );
     runtime.close().await.unwrap();
 }
 
@@ -398,17 +444,26 @@ async fn cancellation_remains_responsive_while_a_tool_executor_is_pending() {
     };
 
     assert_eq!(report.outcome, RunOutcome::Cancelled);
+    assert_runtime_was_reaped(&mut runtime).await;
     runtime.close().await.unwrap();
 }
 
 #[tokio::test]
 async fn refuses_to_start_when_inherited_mcp_configuration_cannot_be_parsed() {
     let executable = FakeExecutable::for_scenario("malformed_config");
-    let error = CodexRuntime::connect(executable.config(None, None))
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
         .await
-        .unwrap_err();
+        .unwrap();
+    let (result, _) = run(
+        &mut runtime,
+        request("run-malformed-config"),
+        &RecallExecutor::default(),
+    )
+    .await;
 
-    assert!(matches!(error, Error::Configuration(message) if message.contains("mcp_servers")));
+    assert!(
+        matches!(result, Err(Error::Configuration(message)) if message.contains("mcp_servers"))
+    );
 }
 
 #[tokio::test]
