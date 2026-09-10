@@ -1,14 +1,14 @@
 //! SQLite evidence history. Each page and its continuation cursor commit together.
-pub mod selection;
 pub mod bounded;
 mod bounded_resolution;
 mod reference_reads;
-pub use reference_reads::ScopedResolutionEvidence;
+pub mod selection;
 use crate::{
     domain::*,
     error::{Error, ErrorKind, Result},
 };
 use chrono::Utc;
+pub use reference_reads::ScopedResolutionEvidence;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

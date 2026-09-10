@@ -176,6 +176,25 @@ Existing observation payloads and fingerprints stay intact. New ingestion chrono
 is monotonic within the repository; migrated cross-capability timestamp ties receive
 a deterministic local order, not an inferred source-publication order.
 
+### Bounded application reads
+
+The application runtime uses `SqliteRepository::bounded_financial_run` and
+`bounded_market_run` with a full provider identity, exact run ID, and
+`storage::bounded::ReadLimits`. They check row counts and UTF-8 payload/metadata
+bytes in the same SQLite snapshot before materializing evidence. Existing
+all-history selection APIs remain available for library callers.
+
+`bounded_scoped_resolution` retains exact run candidates and the existing
+historical identity-conflict outcome. That policy can consult the full catalog,
+so its preflight conservatively bounds all catalog retrievals. A catalog exceeding
+the configured budget returns `LimitExceeded`; it is never truncated to hide a
+conflict. `bounded_document` checks the exact provider/source/retrieval association
+and original checksum before returning bounded bytes.
+
+Workspace ownership, durable frozen dataset IDs, and view receipts belong to
+[`lugus-app`](../lugus-app/README.md). Financial repository IDs or raw run IDs alone
+do not grant workspace access.
+
 ### Resolution/selection verification record
 
 On 2026-09-10, all 145 workspace/all-target Rust tests passed, as did
