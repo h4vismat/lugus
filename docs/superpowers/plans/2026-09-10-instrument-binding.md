@@ -55,20 +55,20 @@ pub struct InstrumentObservation {
 // save_instrument_observation(provider,request,metadata) -> FinancialResult<InstrumentObservation>
 // bounded_instrument_observation(provider,id,ReadLimits) -> ReadResult<InstrumentObservation>
 ```
-- [ ] Write behavioral RED tests: Plugin negotiates instrument_lookup:1; calls instrument_lookup.lookup; rejects nested unknown fields/mismatched source symbol; unsupported version never dispatches. Metadata optional missing fields remain explicit; malformed supplied fields fail. IDs bounded128bytes, name1024, URL4096, issuer IDs at most16, checksum64hex, no controls; finite serialized read preflight before decoding.
+- [x] Write behavioral RED tests: Plugin negotiates instrument_lookup:1; calls instrument_lookup.lookup; rejects nested unknown fields/mismatched source symbol; unsupported version never dispatches. Metadata optional missing fields remain explicit; malformed supplied fields fail. IDs bounded128bytes, name1024, URL4096, issuer IDs at most16, checksum64hex, no controls; finite serialized read preflight before decoding.
 ```rust
 assert_eq!(plugin.lookup_instrument(&query).await.unwrap().ticker.as_deref(), Some("AAPL"));
 assert!(repo.bounded_instrument_observation(&other_provider, id, limits).is_err());
 ```
-- [ ] Run cargo test -p lugus-financial --test instruments --offline and Python new test module; observe missing behavior.
-- [ ] Implement strict typed schema and Plugin adapter using existing request guard, capability gating, deadlines and safe protocol failures. Preserve old market_data:1 semantics.
+- [x] Run cargo test -p lugus-financial --test instruments --offline and Python new test module; observe missing behavior.
+- [x] Implement strict typed schema and Plugin adapter using existing request guard, capability gating, deadlines and safe protocol failures. Preserve old market_data:1 semantics.
 ```rust
 // Validate query, gate capability version, await existing request path,
 // validate returned source identity before returning metadata.
 ```
-- [ ] Add additive financial schema v5 immutable instrument observation rows. Every lookup retrieval has exact provider/request/payload/recorded_at; bound bytes/metadata under the same read snapshot before decode. No all-history materialization. Existing v4 databases migrate without rewriting evidence.
-- [ ] Implement Python pure source projection + injected metadata transport. Prime pinned public Ticker.history(period='5d',interval='1d',auto_adjust=False,back_adjust=False,repair=False,actions=False,timeout=10) with exceptions enabled, then project only symbol/longName/exchangeName/instrumentType from get_history_metadata via individual get calls; optional data stays None; do not manufacture CIK or share-class IDs. Hash bounded canonical source fields used for projection, record source URL and retrieval time. New method requires initialization, validates input before IO and returns safe typed failures; stdout stays protocol-only. Do not use get_info identity: pinned1.7.0 overwrites source symbol with request. Do not iterate lazy metadata keys or use private SDK methods. Test Apple metadata, missing symbol, wrong symbol, missing name/exchange/type, ETF, rate limit/timeout, malformed/oversized source and unchanged daily behavior.
-- [ ] Run focused financial/plugin and all yfinance tests, strict affected Clippy/fmt; commit feat(financial): add sourced instrument lookup evidence. Write full task1 report with actual signatures and schema/version effects.
+- [x] Add additive financial schema v5 immutable instrument observation rows. Every lookup retrieval has exact provider/request/payload/recorded_at; bound bytes/metadata under the same read snapshot before decode. No all-history materialization. Existing v4 databases migrate without rewriting evidence.
+- [x] Implement Python pure source projection + injected metadata transport. Prime pinned public Ticker.history(period='5d',interval='1d',auto_adjust=False,back_adjust=False,repair=False,actions=False,timeout=10) with exceptions enabled, then project only symbol/longName/exchangeName/instrumentType from get_history_metadata via individual get calls; optional data stays None; do not manufacture CIK or share-class IDs. Hash bounded canonical source fields used for projection, record source URL and retrieval time. New method requires initialization, validates input before IO and returns safe typed failures; stdout stays protocol-only. Do not use get_info identity: pinned1.7.0 overwrites source symbol with request. Do not iterate lazy metadata keys or use private SDK methods. Test Apple metadata, missing symbol, wrong symbol, missing name/exchange/type, ETF, rate limit/timeout, malformed/oversized source and unchanged daily behavior.
+- [x] Run focused financial/plugin and all yfinance tests, strict affected Clippy/fmt; commit feat(financial): add sourced instrument lookup evidence. Write full task1 report with actual signatures and schema/version effects.
 
 ## Task 2: Pure binding policy, worker lookup and durable binding store
 

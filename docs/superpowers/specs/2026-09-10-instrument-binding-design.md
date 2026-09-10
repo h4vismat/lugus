@@ -21,6 +21,14 @@ Sources inspected:
 - https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_info.html
 - Local SEC resolution and yfinance provider adapters.
 
+Implementation source clarification: pinned yfinance1.7.0 `get_info()` overwrites
+the returned symbol with the requested symbol, so it cannot establish independent
+identity. The adapter instead primes bounded public history and reads selected
+source fields from public history metadata. An offline characterization against the
+installed library verifies that mismatched source symbols are preserved and rejected.
+This changes the adapter method, not the approved evidence contract. See the
+[lookup protocol](../../../lugus-financial/docs/protocol/instrument-lookup-v1.md).
+
 ## Approaches
 
 1. Recommended: source-supported automatic bindings. Add a provider-neutral instrument
