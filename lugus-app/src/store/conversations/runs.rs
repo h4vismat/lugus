@@ -362,6 +362,62 @@ impl SqliteApplicationStore {
             run_id: id.into(),
         })
     }
+    pub(super) fn conversation_fail_admission(
+        &mut self,
+        epoch: &ExecutionEpoch,
+        conversation: &str,
+        id: &str,
+        error: &AppError,
+    ) -> Result<RunRecord> {
+        let max = record_cap(self);
+        let repository = self.evidence.repository_identity()?;
+        let now = self.clock.now();
+        let error = safe_failure(error);
+        let completion = json(
+            &RunCompletion::Failed {
+                error: error.clone(),
+            },
+            ConversationLimits::TERMINAL_METADATA_BYTES,
+        )?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        fence(&tx, &self.store_key, epoch)?;
+        authorize(&tx, conversation, &repository)?;
+        let mut run = run_read(&tx, conversation, id, max)?;
+        if run.epoch != epoch.generation() {
+            return Err(conflict());
+        }
+        if run.status == RunStatus::Failed {
+            let same: bool = tx
+                .query_row(
+                    "SELECT completion=?2 FROM conversation_runs WHERE id=?1",
+                    params![run.id, completion],
+                    |r| r.get(0),
+                )
+                .map_err(storage)?;
+            if !same {
+                return Err(conflict());
+            }
+            tx.commit().map_err(storage)?;
+            return Ok(run);
+        }
+        if run.status != RunStatus::Admitted {
+            return Err(conflict());
+        }
+        run.status = RunStatus::Failed;
+        run.error = Some(error);
+        run.finished_at = Some(now);
+        save_run(&tx, &run, max)?;
+        tx.execute(
+            "UPDATE conversation_runs SET completion=?2 WHERE id=?1",
+            params![run.id, completion],
+        )
+        .map_err(storage)?;
+        tx.commit().map_err(storage)?;
+        Ok(run)
+    }
     pub(super) fn conversation_finish(
         &mut self,
         attempt: &RunAttempt,

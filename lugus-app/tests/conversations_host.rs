@@ -1189,3 +1189,58 @@ async fn cancellation_during_factory_creation_is_terminal_without_constructing_r
     assert_eq!(behavior.closes.load(Ordering::SeqCst), 0);
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn committed_admission_start_failure_is_terminalized_without_runtime_or_replay() {
+    let (h, host, factory) = host(false).await;
+    let c = host.create("create", "Research").await.unwrap();
+    let connection = rusqlite::Connection::open(&h.application).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_start BEFORE UPDATE ON conversation_runs WHEN NEW.status='running' BEGIN SELECT RAISE(ABORT, 'start fixture'); END;").unwrap();
+    let sent = host.send(send(&c, "one")).await;
+    let runs = host.runs(&c.id, page()).await.unwrap().items;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Failed);
+    assert_eq!(runs[0].error.as_ref().unwrap().kind, ErrorKind::Storage);
+    assert_eq!(sent.unwrap(), runs[0]);
+    assert_eq!(host.send(send(&c, "one")).await.unwrap(), runs[0]);
+    assert_eq!(host.messages(&c.id, page()).await.unwrap().items.len(), 1);
+    assert_eq!(factory.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(host.wait(&c.id, &runs[0].id).await.unwrap(), runs[0]);
+    connection
+        .execute_batch("DROP TRIGGER reject_start;")
+        .unwrap();
+    let next = host.send(send(&c, "two")).await.unwrap();
+    assert_eq!(
+        terminal(&host, &c, &next).await.status,
+        RunStatus::Completed
+    );
+    assert_eq!(factory.calls.load(Ordering::SeqCst), 1);
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unresolved_accepted_start_failure_survives_in_shared_shutdown_outcome() {
+    let (h, host, factory) = host(false).await;
+    let c = host.create("create", "Research").await.unwrap();
+    let connection = rusqlite::Connection::open(&h.application).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_run_update BEFORE UPDATE ON conversation_runs BEGIN SELECT RAISE(ABORT, 'persistent fixture'); END;").unwrap();
+    let _sent = host.send(send(&c, "one")).await;
+    let runs = host.runs(&c.id, page()).await.unwrap().items;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Admitted);
+    assert_eq!(factory.calls.load(Ordering::SeqCst), 0);
+    let failure = host.shutdown().await.unwrap_err();
+    assert_eq!(failure.kind, ErrorKind::Storage);
+    assert_eq!(host.shutdown().await.unwrap_err(), failure);
+    assert_eq!(host.wait(&c.id, &runs[0].id).await.unwrap_err(), failure);
+    assert_eq!(host.send(send(&c, "one")).await.unwrap(), runs[0]);
+    connection
+        .execute_batch("DROP TRIGGER reject_run_update;")
+        .unwrap();
+    let recovered = ConversationHost::recover(h.app.clone()).await.unwrap();
+    assert_eq!(
+        recovered.status(&c.id, &runs[0].id).await.unwrap().status,
+        RunStatus::Interrupted
+    );
+    recovered.shutdown().await.unwrap();
+}

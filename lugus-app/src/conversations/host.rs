@@ -12,7 +12,6 @@ use tokio::sync::{OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, watch};
 
 type Completion = watch::Receiver<Option<Result<()>>>;
 struct Registered {
-    run: Option<(String, String)>,
     request: (String, String),
     cancel: watch::Sender<bool>,
     done: Completion,
@@ -183,7 +182,6 @@ impl ConversationHost {
             state.supervisors.insert(
                 key,
                 Registered {
-                    run: None,
                     request: (request.conversation_id.clone(), request.request_id.clone()),
                     cancel: cancel.clone(),
                     done: completion,
@@ -192,9 +190,7 @@ impl ConversationHost {
             let host = self.clone();
             tokio::spawn(async move {
                 let result = host
-                    .admit_owned(
-                        key, epoch, request, gate, permit, cancel, receiver, receipt_tx,
-                    )
+                    .admit_owned(epoch, request, gate, permit, cancel, receiver, receipt_tx)
                     .await;
                 {
                     let mut state = host.state();
@@ -222,7 +218,6 @@ impl ConversationHost {
     #[allow(clippy::too_many_arguments)]
     async fn admit_owned(
         &self,
-        key: u64,
         epoch: ExecutionEpoch,
         request: SendMessageRequest,
         gate: OwnedMutexGuard<()>,
@@ -231,35 +226,66 @@ impl ConversationHost {
         receiver: watch::Receiver<bool>,
         receipt: watch::Sender<Option<Result<RunRecord>>>,
     ) -> Result<()> {
+        let admission_epoch = epoch.clone();
         let admission = self
             .inner
             .app
-            .conversation_effect(move |s| {
-                let run = s.admit(&epoch, &request)?;
-                if run.status != RunStatus::Admitted {
-                    return Ok((run, None));
-                }
-                match s.start(&epoch, &run.conversation_id, &run.id) {
-                    Ok(attempt) => Ok((s.run(&run.conversation_id, &run.id)?, Some(attempt))),
-                    Err(error) if error.kind == ErrorKind::Conflict => {
-                        Ok((s.run(&run.conversation_id, &run.id)?, None))
-                    }
-                    Err(error) => Err(error),
-                }
-            })
+            .conversation_effect(move |s| s.admit(&admission_epoch, &request))
             .await;
-        drop(gate);
-        let (run, attempt) = match admission {
-            Ok(value) => value,
+        let mut run = match admission {
+            Ok(run) => run,
             Err(error) => {
                 receipt.send_replace(Some(Err(error)));
                 return Ok(());
             }
         };
-        if let Some(entry) = self.state().supervisors.get_mut(&key) {
-            entry.run = Some((run.conversation_id.clone(), run.id.clone()));
-        }
+        // Admission has committed. Keep its receipt and epoch even if the next effect fails.
+        let mut unresolved = None;
+        let attempt = if run.status == RunStatus::Admitted {
+            let start_epoch = epoch.clone();
+            let (conversation, id) = (run.conversation_id.clone(), run.id.clone());
+            match self
+                .inner
+                .app
+                .conversation_effect(move |s| s.start(&start_epoch, &conversation, &id))
+                .await
+            {
+                Ok(attempt) => {
+                    // Start changes only status. No fallible read may discard this acquired attempt.
+                    run.status = RunStatus::Running;
+                    Some(attempt)
+                }
+                Err(error) => {
+                    let (conversation, id) = (run.conversation_id.clone(), run.id.clone());
+                    let failed = self
+                        .inner
+                        .app
+                        .conversation_effect(move |s| {
+                            // A competing claim owns its Running/terminal result; never redispatch it.
+                            if error.kind == ErrorKind::Conflict
+                                && let Ok(existing) = s.run(&conversation, &id)
+                                && existing.status != RunStatus::Admitted
+                            {
+                                return Ok(existing);
+                            }
+                            s.fail_admission(&epoch, &conversation, &id, &error)
+                        })
+                        .await;
+                    match failed {
+                        Ok(terminal) => run = terminal,
+                        Err(error) => unresolved = Some(error),
+                    }
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        drop(gate);
         receipt.send_replace(Some(Ok(run.clone())));
+        if let Some(error) = unresolved {
+            return Err(error);
+        }
         let Some(attempt) = attempt else {
             return Ok(());
         };
@@ -317,10 +343,8 @@ impl ConversationHost {
             if record.status.is_terminal() {
                 return Ok(record);
             }
-            if !self.state().supervisors.values().any(|e| {
-                e.run
-                    .as_ref()
-                    .is_some_and(|(c, r)| c == conversation && r == run)
+            if !self.state().supervisors.values().any(|entry| {
+                entry.request.0 == record.conversation_id && entry.request.1 == record.request_id
             }) {
                 let latest = self.status(conversation, run).await?;
                 if latest.status.is_terminal() {
@@ -405,5 +429,91 @@ struct RecoveryOnly;
 impl RuntimeFactory for RecoveryOnly {
     async fn create(&self) -> Result<Box<dyn lugus_agent::AgentRuntime>> {
         Err(failure(ErrorKind::Unavailable, "no runtime is configured"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        HostBounds, Limits, RandomIds, RepositoryFactory, SqliteApplicationStore,
+        SqliteRepositoryFactory, SystemClock,
+    };
+    #[tokio::test]
+    async fn wait_recognizes_registered_request_before_run_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let financial = root.path().join("financial.sqlite");
+        let repositories = Arc::new(SqliteRepositoryFactory::new(&financial));
+        repositories.initialize().unwrap();
+        let store = SqliteApplicationStore::open(
+            root.path().join("application.sqlite"),
+            Box::new(lugus_financial::storage::SqliteRepository::open(&financial).unwrap()),
+            Limits::default(),
+            Box::new(SystemClock),
+            Box::new(RandomIds::new().unwrap()),
+        )
+        .unwrap();
+        let app = Application::start(
+            vec![],
+            repositories,
+            Box::new(store),
+            Limits::default(),
+            HostBounds::default(),
+            Box::new(RandomIds::new().unwrap()),
+        )
+        .await
+        .unwrap();
+        let host = ConversationHost::recover(app).await.unwrap();
+        let c = host.create("create", "Research").await.unwrap();
+        let request = SendMessageRequest {
+            conversation_id: c.id.clone(),
+            request_id: "one".into(),
+            text: "Research".into(),
+            selected: vec![],
+        };
+        let (cancel, _) = watch::channel(false);
+        let (done, completion) = watch::channel(None);
+        let epoch = {
+            let mut state = host.state();
+            state.supervisors.insert(
+                0,
+                Registered {
+                    request: (c.id.clone(), request.request_id.clone()),
+                    cancel,
+                    done: completion,
+                },
+            );
+            state.epoch.as_ref().unwrap().clone()
+        };
+        // Hold exactly the prepublication phase: registration is present, admission is durable,
+        // and the admitting supervisor has not yet claimed or returned the run to its caller.
+        let admission_epoch = epoch.clone();
+        let run = host
+            .inner
+            .app
+            .conversation_effect(move |s| s.admit(&admission_epoch, &request))
+            .await
+            .unwrap();
+        let mut waiting = Box::pin(host.wait(&c.id, &run.id));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err(),
+            "a registered unpublished run must remain supervised"
+        );
+        let (conversation, id) = (c.id.clone(), run.id.clone());
+        host.inner
+            .app
+            .conversation_effect(move |s| {
+                let attempt = s.start(&epoch, &conversation, &id)?;
+                s.finish_run(&attempt, &RunCompletion::Interrupted)
+            })
+            .await
+            .unwrap();
+        host.state().supervisors.remove(&0);
+        done.send_replace(Some(Ok(())));
+        host.inner.changed.send_replace(());
+        assert_eq!(waiting.await.unwrap().status, RunStatus::Interrupted);
+        host.shutdown().await.unwrap();
     }
 }

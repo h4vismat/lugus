@@ -100,12 +100,22 @@ pub trait ConversationStore: Send {
     fn activate(&mut self, lease: &LocalExecutionLease) -> Result<ExecutionEpoch>;
     fn lookup_request(&self, request: &SendMessageRequest) -> Result<Option<RunRecord>>;
     fn admit(&mut self, epoch: &ExecutionEpoch, request: &SendMessageRequest) -> Result<RunRecord>;
+    /// Atomically claim Admitted -> Running, changing only status; return authority after commit.
     fn start(
         &mut self,
         epoch: &ExecutionEpoch,
         conversation_id: &str,
         run_id: &str,
     ) -> Result<RunAttempt>;
+    /// Terminalize an accepted admission that never acquired a runtime attempt.
+    /// Only Admitted may transition; matching Failed retries are idempotent.
+    fn fail_admission(
+        &mut self,
+        epoch: &ExecutionEpoch,
+        conversation_id: &str,
+        run_id: &str,
+        error: &AppError,
+    ) -> Result<RunRecord>;
     fn append_activity(
         &mut self,
         attempt: &RunAttempt,

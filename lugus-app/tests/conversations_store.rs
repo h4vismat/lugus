@@ -818,3 +818,155 @@ fn aggregate_journal_bytes_and_result_reservation_block_excess_effects() {
     )
     .unwrap();
 }
+
+#[test]
+fn admitted_failure_is_atomic_fenced_and_never_downgrades_an_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let financial = dir.path().join("financial.sqlite");
+    let mut s = store(&path, &financial, ConversationLimits::default());
+    let c = s.create_conversation("create", "Research").unwrap();
+    let other = s.create_conversation("other", "Other").unwrap();
+    let lease = LocalExecutionLease::acquire(&path).unwrap();
+    let epoch = s.activate(&lease).unwrap();
+    let error = AppError::new(ErrorKind::Storage, "private diagnostic", false);
+    let admitted = s.admit(&epoch, &request(&c, "one")).unwrap();
+    assert_eq!(
+        s.fail_admission(&epoch, &other.id, &admitted.id, &error)
+            .unwrap_err()
+            .kind,
+        ErrorKind::ScopeMismatch
+    );
+    let mut foreign_repository = store(
+        &path,
+        &dir.path().join("foreign.sqlite"),
+        ConversationLimits::default(),
+    );
+    assert_eq!(
+        foreign_repository
+            .fail_admission(&epoch, &c.id, &admitted.id, &error)
+            .unwrap_err()
+            .kind,
+        ErrorKind::ScopeMismatch
+    );
+    let mut foreign_store = store(
+        &dir.path().join("other-app.sqlite"),
+        &financial,
+        ConversationLimits::default(),
+    );
+    assert_eq!(
+        foreign_store
+            .fail_admission(&epoch, &c.id, &admitted.id, &error)
+            .unwrap_err()
+            .kind,
+        ErrorKind::ScopeMismatch
+    );
+    let failed = s
+        .fail_admission(&epoch, &c.id, &admitted.id, &error)
+        .unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert!(failed.finished_at.is_some());
+    assert_eq!(failed.input, admitted.input);
+    assert_eq!(failed.error.as_ref().unwrap().kind, ErrorKind::Storage);
+    assert!(
+        !failed
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("private diagnostic")
+    );
+    assert_eq!(
+        s.fail_admission(&epoch, &c.id, &admitted.id, &error)
+            .unwrap(),
+        failed
+    );
+    assert_eq!(
+        s.fail_admission(
+            &epoch,
+            &c.id,
+            &admitted.id,
+            &AppError::new(ErrorKind::Timeout, "different failure", false)
+        )
+        .unwrap_err()
+        .kind,
+        ErrorKind::Conflict
+    );
+    assert_eq!(s.messages(&c.id, page()).unwrap().items.len(), 1);
+    assert_eq!(
+        s.start(&epoch, &c.id, &admitted.id).unwrap_err().kind,
+        ErrorKind::Conflict
+    );
+
+    let mut running = s.admit(&epoch, &request(&c, "two")).unwrap();
+    let attempt = s.start(&epoch, &c.id, &running.id).unwrap();
+    // This is the sole change applied by successful start: hosts need no fallible post-start read.
+    running.status = RunStatus::Running;
+    assert_eq!(s.run(&c.id, &running.id).unwrap(), running);
+    assert_eq!(
+        s.fail_admission(&epoch, &c.id, &running.id, &error)
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    let completed = s
+        .finish_run(
+            &attempt,
+            &RunCompletion::Completed {
+                text: "Answer".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        s.fail_admission(&epoch, &c.id, &running.id, &error)
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    assert_eq!(s.run(&c.id, &running.id).unwrap(), completed);
+
+    let stale = s.admit(&epoch, &request(&other, "three")).unwrap();
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute("UPDATE conversation_config SET epoch=epoch+1", [])
+        .unwrap();
+    assert_eq!(
+        s.fail_admission(&epoch, &other.id, &stale.id, &error)
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    assert_eq!(
+        s.run(&other.id, &stale.id).unwrap().status,
+        RunStatus::Admitted
+    );
+}
+
+#[test]
+fn admitted_failure_rolls_back_if_terminal_metadata_cannot_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let mut s = store(
+        &path,
+        &dir.path().join("financial.sqlite"),
+        ConversationLimits::default(),
+    );
+    let c = s.create_conversation("create", "Research").unwrap();
+    let lease = LocalExecutionLease::acquire(&path).unwrap();
+    let epoch = s.activate(&lease).unwrap();
+    let admitted = s.admit(&epoch, &request(&c, "one")).unwrap();
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute_batch("CREATE TRIGGER reject_completion BEFORE UPDATE OF completion ON conversation_runs BEGIN SELECT RAISE(ABORT, 'fixture'); END;").unwrap();
+    assert_eq!(
+        s.fail_admission(
+            &epoch,
+            &c.id,
+            &admitted.id,
+            &AppError::new(ErrorKind::Storage, "start failed", false)
+        )
+        .unwrap_err()
+        .kind,
+        ErrorKind::Storage
+    );
+    assert_eq!(s.run(&c.id, &admitted.id).unwrap(), admitted);
+    assert_eq!(s.messages(&c.id, page()).unwrap().items.len(), 1);
+}

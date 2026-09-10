@@ -198,6 +198,15 @@ impl ConversationStore for SqliteApplicationStore {
     fn start(&mut self, e: &ExecutionEpoch, c: &str, r: &str) -> Result<RunAttempt> {
         self.conversation_start(e, c, r)
     }
+    fn fail_admission(
+        &mut self,
+        e: &ExecutionEpoch,
+        c: &str,
+        r: &str,
+        error: &AppError,
+    ) -> Result<RunRecord> {
+        self.conversation_fail_admission(e, c, r, error)
+    }
     fn append_activity(&mut self, a: &RunAttempt, k: &str, d: &str) -> Result<ActivityRecord> {
         self.activity_append(a, k, d)
     }
