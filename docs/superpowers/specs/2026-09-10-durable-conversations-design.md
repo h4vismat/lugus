@@ -1,6 +1,6 @@
 # Durable conversations and research workspaces
 
-Status: proposed for user review, 2026-09-10.
+Status: approved by the user on 2026-09-10.
 Base: `codex/instrument-binding` at `e65942b`.
 Design branch: `codex/durable-conversations` in the existing isolated worktree.
 
