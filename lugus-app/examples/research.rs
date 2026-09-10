@@ -47,7 +47,9 @@ async fn agent_fixture(
     let tools = ResearchExecutor::new(app.clone(), scope.clone())?;
     let request = RunRequest {
         run_id: run,
-        thesis_id: thesis.thesis_id.clone(),
+        subject: lugus_agent::RunSubject::Thesis {
+            id: thesis.thesis_id.clone(),
+        },
         instructions: "Use explicit provider evidence and accept a view request.".into(),
         context: thesis.text.clone(),
         prompt: "Run the deterministic evidence workflow for this stored thesis.".into(),

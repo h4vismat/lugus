@@ -32,3 +32,5 @@ pub use config::*;
 
 pub mod bindings;
 pub use bindings::*;
+
+pub mod conversations;

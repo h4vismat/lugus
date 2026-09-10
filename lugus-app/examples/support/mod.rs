@@ -199,7 +199,10 @@ impl AgentRuntime for FixtureRuntime {
         mut cancel: watch::Receiver<bool>,
     ) -> AgentResult<RunReport> {
         validate_request(&request)?;
-        if request.thesis_id != self.thesis.thesis_id
+        if request.subject
+            != (lugus_agent::RunSubject::Thesis {
+                id: self.thesis.thesis_id.clone(),
+            })
             || request.context != self.thesis.text
             || request.limits.max_tool_calls < self.command.tool_count()
         {

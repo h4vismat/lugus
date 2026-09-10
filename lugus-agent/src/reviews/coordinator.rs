@@ -173,7 +173,9 @@ impl<'a> ReviewCoordinator<'a> {
         }
         Ok(RunRequest {
             run_id: attempt.run_id(),
-            thesis_id: review.thesis.thesis_id,
+            subject: crate::RunSubject::Thesis {
+                id: review.thesis.thesis_id,
+            },
             instructions: INSTRUCTIONS.into(),
             context: String::new(),
             prompt,

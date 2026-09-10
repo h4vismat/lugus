@@ -93,7 +93,9 @@ fn request(run_id: &str) -> RunRequest {
     RunRequest {
         allow_web_search: true,
         run_id: run_id.into(),
-        thesis_id: "thesis-A".into(),
+        subject: lugus_agent::RunSubject::Thesis {
+            id: "thesis-A".into(),
+        },
         instructions: "You are the Lugus review agent.".into(),
         context: "Use only the supplied thesis context.".into(),
         prompt: "Review thesis A".into(),
