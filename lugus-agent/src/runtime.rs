@@ -13,6 +13,9 @@ pub struct RunRequest {
     pub instructions: String,
     pub context: String,
     pub prompt: String,
+    /// Native research is an explicit host capability; missing serialized values fail closed.
+    #[serde(default)]
+    pub allow_web_search: bool,
     pub tools: Vec<ToolSpec>,
     pub limits: RunLimits,
 }

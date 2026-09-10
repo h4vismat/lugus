@@ -183,6 +183,8 @@ def serve_session():
             "project_doc_max_bytes": 0, "developer_instructions": "", "web_search": "live",
             "mcp_servers": expected_mcp_servers,
         }
+        if scenario == "no_web_search":
+            expected_config["web_search"] = "disabled"
         if params.get("cwd") != os.getcwd() or params.get("baseInstructions") != "You are the Lugus review agent." or params.get("developerInstructions") != "Use only the supplied thesis context." or tools != [expected_tool] or params.get("approvalPolicy") != "never" or params.get("sandbox") != "read-only" or params.get("config") != expected_config:
             send({"id": message["id"], "error": {"code": -32602, "message": "invalid thread settings"}})
             continue

@@ -2,6 +2,7 @@ use lugus_agent::{RunLimits, RunRequest, ToolSpec, validate_request};
 
 fn valid_request() -> RunRequest {
     RunRequest {
+        allow_web_search: true,
         run_id: "run-1".into(),
         thesis_id: "thesis-1".into(),
         instructions: "Analyze evidence".into(),
@@ -24,6 +25,7 @@ fn rejects_duplicate_tool_names() {
         input_schema: serde_json::json!({"type":"object","properties":{}}),
     };
     let request = RunRequest {
+        allow_web_search: true,
         run_id: "run-1".into(),
         thesis_id: "thesis-1".into(),
         instructions: "Analyze evidence".into(),

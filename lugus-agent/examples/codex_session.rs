@@ -79,6 +79,7 @@ impl ToolExecutor for DemonstrationTools {
 
 fn request(prompt: String) -> RunRequest {
     RunRequest {
+        allow_web_search: true,
         run_id: "codex-session-example".into(),
         thesis_id: "demonstration-thesis-A".into(),
         instructions: "You are a demonstration research agent. Use lugus_context when the prompt asks for application context, and identify it as demonstration data.".into(),

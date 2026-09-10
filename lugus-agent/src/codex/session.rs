@@ -280,6 +280,9 @@ impl CodexRuntime {
             "sandbox": "read-only",
             "config": unattended_config(mcp_server_ids),
         });
+        if !request.allow_web_search {
+            params["config"]["web_search"] = json!("disabled");
+        }
         if let Some(model) = &self.model {
             params["model"] = json!(model);
         }

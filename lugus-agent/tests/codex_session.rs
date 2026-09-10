@@ -91,6 +91,7 @@ fn fixture() -> PathBuf {
 
 fn request(run_id: &str) -> RunRequest {
     RunRequest {
+        allow_web_search: true,
         run_id: run_id.into(),
         thesis_id: "thesis-A".into(),
         instructions: "You are the Lugus review agent.".into(),
@@ -662,5 +663,19 @@ async fn process_death_during_a_turn_is_reported_explicitly() {
     )
     .await;
     assert!(matches!(result, Err(Error::UnexpectedEof)));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn stored_evidence_run_disables_native_web_search() {
+    let executable = FakeExecutable::for_scenario("no_web_search");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let mut input = request("offline-review");
+    input.allow_web_search = false;
+    let executor = RecallExecutor::default();
+    let result = run(&mut runtime, input, &executor).await;
+    assert_eq!(result.0.unwrap().outcome, RunOutcome::Completed);
     runtime.close().await.unwrap();
 }

@@ -1,6 +1,6 @@
 # lugus-agent
 
-`lugus-agent` is the first-milestone runtime harness for disposable agent turns. Its public `AgentRuntime` and `ToolExecutor` boundaries do not expose Codex protocol types, so another runtime adapter can implement the same contracts. The current adapter supports `codex-cli 0.153.4` exactly.
+`lugus-agent` provides disposable agent turns and durable, explicitly requested investment reviews. Its public `AgentRuntime` and `ToolExecutor` boundaries do not expose Codex protocol types, so another runtime adapter can implement the same contracts. The current adapter supports `codex-cli 0.153.4` exactly.
 
 ## Run the Codex example
 
@@ -46,7 +46,7 @@ Cancellation sends Codex `turn/interrupt`, waits for a bounded grace period, and
 
 ## Runtime boundary
 
-One `CodexRuntime` adapter instance runs one task at a time. The harness returns runtime completion independently of future assessment validation. It does not store memories, persist an assessment, schedule reviews, capture documents, or turn native web-search output into durable evidence. Those are later application and storage milestones.
+One `CodexRuntime` adapter instance runs one task at a time. The harness returns runtime completion independently of future assessment validation. The runtime adapter itself does not persist assessments. The `reviews` application layer below stores theses, frozen financial evidence and assessment history. Shared memory, automatic scheduling, document capture and durable web research remain later milestones.
 
 Native web search is requested in the read-only Codex configuration, but actual availability depends on the selected model and provider. A public-document lookup can demonstrate that capability; its response remains transient. Capturing source documents and provenance belongs to milestone 3.
 
@@ -74,3 +74,50 @@ On 2026-09-10, the example was run with the user's existing authenticated Codex 
 - A third fresh empty workspace run used `--cancel-after-ms 500`. It delivered `Started` and returned `Cancelled` without tool or text events, confirming interruption and process cleanup through the runnable interface.
 
 The observed initialize, tool callback, text-delta, completion, and interruption shapes matched the pinned protocol fixture; no adapter change was required.
+
+
+## Durable investment reviews
+
+`reviews::ReviewCoordinator` runs a persisted review through `AgentRuntime`. Its `ReviewStore` port owns thesis revisions, review requests, immutable selected evidence and assessment history. `SqliteReviewStore` implements atomic persistence in a separate agent database. The financial adapter consumes the public financial repository snapshot API; it captures facts, filing metadata and ingestion scope, including historical revisions. It does not fetch documents, capture market-price data, or perform fresh research.
+
+From the workspace root, create a text file containing your thesis, then run:
+
+```sh
+cargo run -p lugus-agent --example durable_review -- create ./agent.db thesis-1 ./thesis.txt
+cargo run -p lugus-agent --example durable_review -- evidence ./financial.db ./provider.json ./query.json
+cargo run -p lugus-agent --example durable_review -- queue ./agent.db review-1 thesis-1 1 ./financial.db ./provider.json ./query.json
+mkdir -p /tmp/lugus-review-workspace
+cargo run -p lugus-agent --example durable_review -- run ./agent.db review-1 /tmp/lugus-review-workspace
+cargo run -p lugus-agent --example durable_review -- show ./agent.db thesis-1
+```
+
+`provider.json` and `query.json` contain the existing `lugus_financial::domain::ProviderIdentity` and `Query` JSON values for already-ingested data. Use the provider identity from your ingestion configuration. `evidence` enumerates captured payloads and their IDs. For large snapshots, pass a final `selected-ids.json` argument to `queue`: a JSON array of the exact desired evidence IDs. The CLI also includes the snapshot-scope record. Queueing allows at most 64 records (each at most 64 KiB) and rejects excess data instead of silently truncating it. A scope record that itself exceeds the item bound requires a narrower query.
+
+Every CLI invocation reopens the database. `show` prints the current user thesis, saved assessments and the exact evidence retained with each assessed review; it requires no runtime or financial database. After ingesting changed data, enqueue a new review ID and run it. The new review captures the current prior assessment, while old reviews retain their original inputs. To edit the thesis, use `edit AGENT_DB THESIS_ID EXPECTED_REVISION TEXT_FILE`; original revisions remain preserved. User text is limited to 16 KiB and assessment drafts to 32 KiB; starting runtime context is limited to 64 KiB.
+
+Only `run` calls the configured remote model. It requires an existing empty workspace and uses existing Codex authentication. Stored evidence and thesis text are sent to that model. Native web search is disabled for these runs. `RunRequest.allow_web_search` is an explicit capability; absent serialized values default to false, and the generic Codex example explicitly opts in. The verified Codex session override uses `web_search = "disabled"`, which removes the tool ([official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)).
+
+### Completion and recovery
+
+The agent reads selected evidence with `lugus_read_evidence` and persists a strict structured draft with `lugus_submit_assessment`. Lugus validates selected evidence references, expected thesis/history revisions and attempt ownership. Assessment insertion and review completion commit in one transaction. Validation establishes structure and provenance references, not factual correctness; unsupported questions and uncertainty remain visible.
+
+Review IDs are caller-owned idempotency keys. Reusing an ID with different thesis/evidence inputs is rejected. Identical submission retries return the existing assessment; conflicting submissions cannot overwrite it. One review per thesis may run at a time. Runtime completion without a saved assessment is `failed`. Authentication/attention errors are `blocked`; cancellation is `interrupted`. A saved assessment stays `completed` even if the runtime subsequently fails or is cancelled. Changes to the thesis or its prior assessment during execution block stale submission; create a new review request with current inputs.
+
+Use `status AGENT_DB REVIEW_ID` to inspect the persisted lifecycle. Failed, interrupted or authentication-blocked requests can be run again with their frozen inputs. Each attempt receives a new fencing token. `recover AGENT_DB` marks abandoned running reviews interrupted. Invoke recovery only on application startup after previous executors have stopped; merely opening a second database connection never interrupts active work. A process kill or dropped execution future is recovered this way. For an explicit cancellation check, append a delay in milliseconds to `run`, such as `500`.
+
+The coordinator accepts a `Clock`, event channel, cancellation channel and runtime limits. It gives an interrupted runtime up to two seconds to acknowledge cancellation, then bounds `close()` to three seconds. Replacement runtimes must implement bounded cleanup and clean up owned resources on drop. Short synchronous SQLite transactions are never held across an await; busy-lock waits can take up to five seconds, so host coordination off the UI thread. The CLI records a runtime version and indicates that model/provider use configured defaults; exact resolved model identity is not currently exposed by `AgentRuntime`.
+
+### Verification
+
+Deterministic tests use real temporary financial and agent databases and a fake external runtime driving the real scoped tools. They cover reopen and changed-evidence history, incomplete ingestion, explicit selection, atomic rollback, concurrent and duplicate submission, stale revisions/attempts, cancellation before/after commit, dropped-future recovery, error/result bounds and native-search configuration. Run:
+
+```sh
+cargo test --workspace --all-targets --offline
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo fmt --all -- --check
+```
+
+
+On 2026-09-10, all 116 workspace/all-target tests passed, as did strict workspace Clippy and formatting. Independent review covered transaction races, attempt fencing, tool scope and cancellation; its error-response-size finding was reproduced and fixed.
+
+Live validation used only synthetic fixture data in temporary financial/agent databases and an empty runtime workspace with existing Codex authentication. Review A read a stored 100 USD asset fact and persisted a supported assessment. A fresh process/session for review B retrieved that saved assessment and a newly selected 80 USD fact, then persisted a contradicted assessment explaining the change. Offline `show` confirmed both original evidence versions and both assessments. A third run cancelled after 500 ms persisted `interrupted` and left the assessment count at two. CLI create, selection, edit, show, status and recovery were also exercised. These checks establish the local workflow and supported Codex integration, not investment reasoning quality or compatibility with every model/provider.
