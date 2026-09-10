@@ -322,6 +322,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lugus-app"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "lugus-financial",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "lugus-financial"
 version = "0.1.0"
 dependencies = [

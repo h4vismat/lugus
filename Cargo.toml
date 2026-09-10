@@ -1,3 +1,3 @@
 [workspace]
-members = ["lugus-agent","lugus-financial"]
+members = ["lugus-agent","lugus-app","lugus-financial"]
 resolver = "3"
