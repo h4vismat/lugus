@@ -24,7 +24,7 @@ use crate::{
 
 const EVENT_DELIVERY_TIMEOUT: Duration = Duration::from_millis(100);
 const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
-const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 struct TurnScope<'a> {

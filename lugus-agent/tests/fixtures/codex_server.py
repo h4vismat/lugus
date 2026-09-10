@@ -104,6 +104,8 @@ def serve_session():
         while True:
             send({"method": "server/unrelated", "params": {}})
             time.sleep(0.01)
+    if scenario == "slow_initialize":
+        time.sleep(6)
     rpc_result(initialize, {
         "codexHome": os.getcwd(), "platformFamily": "unix",
         "platformOs": sys.platform, "userAgent": "codex-cli/0.153.4",

@@ -477,6 +477,19 @@ async fn cancellation_during_startup_reaps_before_any_turn_is_started() {
 }
 
 #[tokio::test]
+async fn startup_accepts_a_response_within_the_existing_thirty_second_budget() {
+    let executable = FakeExecutable::for_scenario("slow_initialize");
+    let mut runtime = timeout(
+        Duration::from_secs(10),
+        CodexRuntime::connect(executable.config(None, None)),
+    )
+    .await
+    .expect("the delayed response should complete within the test deadline")
+    .expect("a six-second response remains within the supported RPC budget");
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn startup_rpcs_timeout_across_unrelated_notifications() {
     let executable = FakeExecutable::for_scenario("startup_notifications");
     let error = CodexRuntime::connect(executable.config(None, None))
