@@ -176,7 +176,7 @@ fn identifier_schema() -> Value {
         &["namespace", "value"],
     )
 }
-fn financial_query_schema() -> Value {
+pub(crate) fn financial_query_schema() -> Value {
     object_schema(
         [
             ("company", identifier_schema()),
@@ -195,7 +195,7 @@ fn financial_query_schema() -> Value {
         &["company", "filed_from", "filed_to", "page_size"],
     )
 }
-fn price_query_schema() -> Value {
+pub(crate) fn price_query_schema() -> Value {
     object_schema(
         [
             ("instrument", identifier_schema()),

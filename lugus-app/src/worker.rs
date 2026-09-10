@@ -455,8 +455,14 @@ async fn execute_job(
             return;
         }
     };
-    let authorized = lock_catalog(catalog)
-        .and_then(|catalog| catalog.authorize(&job.offering, &job.provenance.command));
+    let authorized = lock_catalog(catalog).and_then(|catalog| {
+        // Admission closure and cancellation are published under this same catalog lock.
+        // Capacity acquisition may precede that closure, so recheck after acquiring the lock.
+        if *job.cancel.borrow() || *shutdown.borrow() {
+            return Err(cancelled_error());
+        }
+        catalog.authorize(&job.offering, &job.provenance.command)
+    });
     let error = match authorized {
         Ok(auth) if auth.generation == job.generation && provider.identity() == &auth.identity => {
             None
@@ -607,3 +613,6 @@ async fn fetch(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod dispatch_tests;
