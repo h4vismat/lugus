@@ -4,7 +4,7 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The next milestone is **filing text and passage references** (milestone 4). Durable conversations and research workspaces are implemented on local branch `codex/durable-conversations` in `/private/tmp/lugus-backend-development`, through `af1aa68` plus completion documentation. This branch includes the completed application runtime, company resolution, observation selection and company-to-market binding (`e65942b`). It remains local and unmerged. Read the application README and completed conversation plan before designing the next milestone.
+The next milestone is **active-workspace background refresh** (milestone 5). HTML filing text and passage references are implemented on local branch `codex/filing-passages` in `/private/tmp/lugus-backend-development`, through `d9df02c` plus completion documentation. This branch includes the completed runtime, resolution/selection, company-to-market binding and durable conversations. It remains local and unmerged. Read the application README and completed filing-passages plan before designing the next milestone.
 
 First check repository/branch state. Company resolution and observation selection were implemented in `eea83bf`; application runtime and lifecycle fixes extend through `403aa1d`, with its completion documentation at `781a539`. Binding work builds on that commit. These features have not been merged into `main`; do not infer missing implementation from a checkout of `main`, repeat the work, or overwrite pending documents. Temporary worktree paths may change; branch and commit identify the implementation.
 
@@ -102,15 +102,20 @@ Version 1 limits: conversation bounds are persisted (changes need an explicit co
 
 **Exit met:** ask a question, obtain a research-view request, restart and reopen the conversation and its views offline, then continue with the intended frozen context without replaying earlier work.
 
-### 4. Filing text and passage references
+### 4. Filing text and passage references — complete
 
-**Status: implementation complete; controller verification and review pending.**
+Implemented in `lugus-app` through `d9df02c`:
 
-Extract readable content from HTML filings, including Inline XBRL, while retaining original document checksum, extraction version, text-representation identity, and mappings to source locations. PDF extraction and OCR are deferred, along with XML/SGML extraction and browser/desktop highlighting.
+- Pure, versioned, replaceable local HTML/Inline XBRL extraction with bounded parsing, canonical UTF-8 text and exact/normalized/synthetic mappings to decoded source-node locations.
+- Additive application schema v4 stores immutable, scoped representations and deduplicated passages with original document checksums and extraction identity. Bounded source reads preserve all whitespace contributors and validate stored integrity.
+- Six shared manual/agent operations and CLI commands prepare/read text, create/read passages and resolve sources. Selected passages become typed frozen, untrusted conversation context.
+- Supervised preparation stays outside the store mutex, bounds concurrency, and supports cancellation and shutdown. Offline reads need no provider or extraction.
 
-Bind a user's selection to the exact document/text version and pass a bounded reference into an agent turn. Source coordinates address deterministic parsed source-node text rather than raw HTML bytes or rendered layout. Conversation passage context and durable review evidence capture remain distinct concerns.
+Verification: **400 workspace/all-target Rust tests**, strict workspace/all-target/all-feature Clippy, formatting, **31 SEC Python tests** and **23 pinned yfinance Python tests** passed. Independent task reviews and whole-milestone review are clean; all confirmed findings were fixed and re-reviewed. A fresh standalone CLI flow checked seven literal source/mapping entries, original byte checksums, actual recorded AgentRuntime source resolution, changed same-URL bytes, closed views, stale-quote rejection, complete offline passage/source/context equality, retry without replay and a fresh offline follow-up after provider-manifest removal. No live model or provider-network acceptance is claimed.
 
-**Exit pending controller verification:** ask about a selected passage in a real HTML/Inline XBRL fixture, follow its source location, and verify that a newer same-URL document revision does not reinterpret the old selection after restart and provider removal.
+Version 1 supports HTML with strict UTF-8 or explicitly declared Windows-1252. Visibility is structural/inline-style based; computed CSS and browser layout are not evaluated. Source coordinates identify parsed text nodes, not original byte offsets or browser UTF-16. The default parser's bounded abort requires normal unwind builds; injected extractors must cooperate with limits/cancellation. Mapping inventory checks scan a bounded covering index while payload reads remain overlap-only. An atomic save already admitted before cancellation may finish. PDF/OCR, XML/SGML extraction, desktop highlighting and durable review passage capture remain deferred. See the [application README](../../lugus-app/README.md) and [completed plan](plans/2026-09-10-filing-passages.md).
+
+**Exit met:** ask about a selected HTML/Inline XBRL passage through the actual runtime, resolve its exact source, and retain the original selection unchanged after a same-URL revision, restart and provider removal.
 
 ### 5. Active-workspace background refresh
 
@@ -132,12 +137,14 @@ This milestone owns desktop transport, rendering, keyboard/focus behavior, view-
 
 Resolve `$IBM` → select its market instrument → fetch available data through configured capabilities → ask questions → request structured research views → save and reopen the conversation → refresh only the active workspace → inspect an earlier review with its original evidence.
 
-This full workflow is not yet implemented. The application runtime, company-to-market binding and durable conversations are complete; filing text/passages, active-workspace refresh and desktop integration remain. The conversation acceptance uses a thesis-free runtime; the separate legacy fixture still exercises a real persisted thesis.
+This full workflow is not yet implemented. The application runtime, company-to-market binding, durable conversations and HTML filing text/passages are complete; active-workspace refresh and desktop integration remain. The conversation acceptance uses a thesis-free runtime; the separate legacy fixture still exercises a real persisted thesis.
 
 ## Reading list
 
 Paths are relative to the repository root; inspect the implementation branch when a file is absent from the current checkout.
 
+- `docs/superpowers/specs/2026-09-10-filing-passages-design.md` — approved HTML-only extraction and passage boundaries.
+- `docs/superpowers/plans/2026-09-10-filing-passages.md` — completed passage implementation, review and verification record.
 - `docs/superpowers/specs/2026-09-10-durable-conversations-design.md` — approved conversation persistence/recovery boundaries.
 - `docs/superpowers/plans/2026-09-10-durable-conversations.md` — completed conversation implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-instrument-binding-design.md` — approved automatic source-supported binding design.
