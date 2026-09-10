@@ -3,8 +3,8 @@ import base64
 import json
 import os
 import pathlib
+import select
 import sys
-import time
 
 for line in sys.stdin:
     req = json.loads(line)
@@ -24,7 +24,11 @@ for line in sys.stdin:
         if method == 'market_data.daily': (root / 'prices-started').touch()
         if (mode == 'apple_price_blocked' and method == 'market_data.daily') or mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
             while not (root / 'release').exists():
-                time.sleep(0.005)
+                # A killed CLI cannot run normal child cleanup. During a blocked
+                # response, EOF on the request pipe means its owner is gone.
+                ready, _, _ = select.select([sys.stdin], [], [], 0.005)
+                if ready and not os.read(sys.stdin.fileno(), 1):
+                    raise SystemExit(0)
         if mode == 'protocol':
             print('invalid-json', flush=True)
             continue

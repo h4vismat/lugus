@@ -118,4 +118,139 @@ cargo fmt -p lugus-app --check
 
 Integration tests exercise real Python children and SQLite: dispatch cancellation, partial-run finalization, scope/run injection, strict nested input, activation during turns, independent instances, startup/shutdown races, bounded queues/registry/events/results, storage failure, blocking-store isolation, reference reopening and the actual CLI sequence. Financial selection and provider protocol semantics remain in `lugus-financial`.
 
-General conversation identity and persistence, passage extraction, background refresh, live model acceptance and desktop rendering remain outside this milestone. The existing `AgentRuntime` requires a real thesis ID; the CLI intentionally enforces that boundary.
+`AgentRuntime` uses an explicit `RunSubject::Thesis` or `RunSubject::Conversation`.
+The legacy `agent-fixture` intentionally requires a real persisted thesis. Durable
+conversations use application-owned storage and need no thesis or assessment.
+Passage extraction, background refresh, live model acceptance, and desktop rendering
+remain outside this milestone. Document observations retain original evidence metadata;
+they do not imply extracted filing text.
+
+## Durable conversation CLI
+
+The same binary and example expose `conversation COMMAND CONFIG ...`. These commands
+compose the shared `ConversationHost` and `Application` APIs. A conversation owns one
+workspace, which may cover several companies. Creating a conversation leaves its
+messages, runs, and tabs empty. Existing manual fetch/dataset/view commands can use
+its returned `workspace_id` to open views before any conversation turn.
+
+Start with a fresh directory using `examples/synthetic/setup.py` as above. In addition
+to the legacy files, setup writes `conversation-create.json`,
+`conversation-research.json`, and `blocked.json`. No model credentials or network
+are needed; the explicit fixture JSON selects a deterministic `AgentRuntime` adapter.
+The research mode reuses the same twelve real source-supported Apple/AAPL tools as
+`agent-fixture`, without manufacturing a thesis or seeding a binding.
+
+```sh
+target/debug/lugus-research conversation create /tmp/lugus-research-demo/config.json /tmp/lugus-research-demo/conversation-create.json > /tmp/lugus-research-demo/conversation.json
+python3 - <<'PYINPUT'
+import json
+from pathlib import Path
+root = Path('/tmp/lugus-research-demo')
+c = json.loads((root / 'conversation.json').read_text())
+(root / 'conversation-send.json').write_text(json.dumps({
+    'conversation_id': c['id'], 'request_id': 'research-1',
+    'text': 'Research Apple/AAPL with source-supported evidence.', 'selected': [],
+}))
+PYINPUT
+target/debug/lugus-research conversation send /tmp/lugus-research-demo/config.json /tmp/lugus-research-demo/conversation-send.json /tmp/lugus-research-demo/conversation-research.json
+```
+
+`send` emits newline-delimited JSON: a flushed `{"event":"admitted","run":...}`
+receipt and, after supervised cleanup, `{"event":"terminal","run":...}`. Save
+`run.id` and `run.conversation_id`. A terminal record may be `completed`, `failed`,
+or `interrupted`; successful CLI exit means the command was handled, so inspect
+`run.status`. Admission errors exit nonzero with bounded JSON on stderr
+(`error.kind`, `error.message`, `error.retryable`). No raw provider diagnostics appear.
+Reusing an identical `request_id` returns its original receipt without replaying tools;
+changing a request with the same ID conflicts. A fresh accepted turn creates a fresh
+runtime with the host's immutable offering and derived workspace/run/call scope.
+
+Replace `C`, `R`, `D`, and `V` below with returned conversation/run/dataset/view IDs:
+
+| Command after `conversation` | Result |
+| --- | --- |
+| `create CONFIG FILE` | Conversation; strict file has `request_id`, `title` |
+| `list CONFIG OFFSET LIMIT` | Conversation page |
+| `show CONFIG C` | Conversation identity and workspace ID |
+| `messages CONFIG C OFFSET LIMIT` | Message page, chronological `items` |
+| `runs CONFIG C OFFSET LIMIT` | Durable run page |
+| `status CONFIG C R` | Durable run record |
+| `workspace CONFIG C` | Revision, ordered `view_ids`, selected view |
+| `context CONFIG C R` | Immutable input snapshot, pinned references, omission count |
+| `activity CONFIG C R OFFSET LIMIT` | Durable activity page |
+| `tools CONFIG C R OFFSET LIMIT` | Exact tool intents and outcomes |
+| `dataset CONFIG C D OFFSET LIMIT` | Original scoped dataset page and provenance |
+| `view CONFIG C V` | Original scoped accepted view receipt |
+| `layout CONFIG C FILE` | Revised workspace layout |
+| `send CONFIG REQUEST_JSON FIXTURE_JSON` | Admitted and terminal run records |
+| `continue CONFIG REQUEST_JSON FIXTURE_JSON` | Fresh offline continuation fixture |
+| `recover CONFIG` | `{"recovered":true}` after exclusive recovery and cleanup |
+
+All pages expose `items` and `next_offset`, except dataset pages which expose `rows`.
+Use bounded pages (for example `0 10`) until `next_offset` is null. Reads, create,
+layout, and explicit recovery open offline even with the original config after its
+manifest has been removed. Ordinary reads never acquire execution ownership or
+recover a run. Dataset/view reads enforce the conversation workspace's scope.
+
+The completed research assistant message's `text` is JSON containing `subject_kind`,
+`answer`, and concise exact IDs under `receipts.company_dataset`, `instrument_fetch`,
+`binding`, `fetch`, `dataset`, and `view`. Full provider results remain in the durable
+tool journal: `intent.arguments` and `outcome.result.content` are JSON strings. A view
+receipt records acceptance, not desktop presentation.
+
+For a fresh offline follow-up, write another send request with a new `request_id`
+and `selected: [{"kind":"dataset","id":"D"}]`. Its fixture file is
+`{"mode":"continue","expected_message_ids":["USER_MESSAGE_ID","ASSISTANT_MESSAGE_ID"],"expected_dataset_id":"D"}`.
+Use the exact prior IDs from `messages`, in chronological order, and pass both files
+to `continue`. This new runtime checks the prior messages and selected frozen dataset
+in the host-provided context; it executes zero tools. It also works after deleting
+the generated manifest. The original run's tool count stays twelve. Explicit
+selection can also include `{"kind":"view","id":"V"}` or an active binding.
+Pinned history retains original source references after later binding supersession,
+a different dataset, or closing a tab. The context policy includes a bounded suffix
+of whole exchanges and reports `omitted_messages`; it creates no automatic summary.
+Prior messages and evidence are user data, separate from trusted instructions.
+
+Layout JSON uses an expected revision, for example
+`{"expected_revision":1,"mutation":{"operation":"close","view_id":"V"}}`.
+Other mutations are `select` with `view_id` and `reorder` with the complete `view_ids`
+array. Stale revisions conflict. Closing a tab preserves its original view and data.
+
+Cancellation belongs to the live `send`/`continue` process. After its admission
+receipt, write one JSON line to **that process's stdin**:
+`{"command":"cancel","conversation_id":"C","run_id":"R"}`.
+It validates both IDs against its receipt, signals the owning host, and waits for
+cleanup before emitting the terminal result. Invalid controls emit
+`{"event":"control_error","error":...}` without canceling. Lines are limited to
+4096 bytes including their newline; an oversized line closes the control reader.
+EOF merely closes controls and never auto-cancels. An idle open stdin never keeps a
+finished command alive. Independent CLI processes can inspect a live run, but v1 has
+no interprocess control service for canceling another owner.
+
+For a real crash demonstration, submit a new request using `blocked.json` and the
+research fixture. Poll `tools` until eight records exist: the first seven completed,
+with the eighth bound-price call's `outcome` and `finished_at` still null. Kill only
+the spawned CLI owner. The synthetic child detects pipe EOF and exits. Offline
+`status` still says `running`; `recover` explicitly reconciles it to `interrupted`
+and leaves that pending tool outcome unknown (null). Recovery does not create a
+runtime, retry a tool, add messages, or modify completed earlier runs. Partial text
+is retained in runtime activity (`data` encodes a `text_delta` event), never promoted
+to a completed assistant message. Submit a new request using `config.json` to execute
+again. A second owner or recovery process conflicts while the first owner is alive.
+
+Execution uses an OS lease beside the canonical application database,
+`<canonical-db>.conversation.lock`; never delete that stable lock file. Ownership is
+held until all supervisors, tools, and storage finalization finish. Supported scope
+is local SQLite on local filesystems, with symlink aliases canonicalized; hard-link
+aliases and network filesystem locking semantics are unsupported.
+
+External request/config files are limited to 1 MiB and reject unknown fields. Shared
+conversation limits independently bound complete serialized messages, context,
+selected references, journal/activity, pages, open views, active runs, and shutdown.
+Defaults include a 60-second turn deadline, 128 tool calls, 16 KiB user messages,
+32 KiB assistant messages, 256 KiB context, and a 5-second runtime-close timeout.
+Application/tool/page budgets also apply, including JSON escaping and envelopes;
+the generated sample's 32 KiB application output cap can constrain a large context
+before the default context cap. `conversation_limits` in application config uses
+serde defaults and must match stored limits once configured; changing durable
+limits requires a future explicit migration.

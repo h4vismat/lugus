@@ -17,7 +17,9 @@ async fn read_file(path: &str) -> CliResult<Vec<u8>> {
             .take(1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() > 1024 * 1024 {
-            return Err("input file exceeds 1 MiB".into());
+            return Err(
+                AppError::new(ErrorKind::ResourceLimit, "input file exceeds 1 MiB", false).into(),
+            );
         }
         Ok(bytes)
     })
@@ -160,6 +162,9 @@ async fn local(app: &Application, scope: &Scope, command: &str, args: &[&str]) -
     }
 }
 async fn run(args: &[&str]) -> CliResult<Value> {
+    if let ["conversation", tail @ ..] = args {
+        return support::conversations::run(tail).await;
+    }
     if let ["thesis-create", db, id, file] = args {
         let text = String::from_utf8(read_file(file).await?)?;
         let db = db.to_string();
@@ -204,7 +209,21 @@ async fn main() {
             "{}",
             serde_json::to_string(&value).expect("JSON value serializes")
         ),
-        Err(_) => {
+        Err(error) => {
+            if args.first() == Some(&"conversation") {
+                let error = error
+                    .downcast_ref::<AppError>()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        AppError::new(
+                            ErrorKind::InvalidInput,
+                            "invalid conversation command or input",
+                            false,
+                        )
+                    });
+                eprintln!("{}", json!({"error":error}));
+                std::process::exit(1);
+            }
             eprintln!(
                 "research command failed; check arguments, stored thesis and configured resources"
             );

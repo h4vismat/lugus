@@ -60,3 +60,11 @@ for name, target, mode in [("wrong-issuer.json","market","apple_wrong_issuer"),(
     for provider in altered['providers']:
         if provider['instance_id'] == target: provider['config']['mode'] = mode
     write(name, altered)
+
+write("conversation-create.json", {"request_id":"conversation-create", "title":"Apple research"})
+write("conversation-research.json", {"mode":"research", "workflow":json.loads((root / "binding.json").read_text())})
+blocked = json.loads(json.dumps(config))
+for provider in blocked['providers']:
+    if provider['instance_id'] == 'market':
+        provider['config']['mode'] = 'apple_price_blocked'
+write("blocked.json", blocked)

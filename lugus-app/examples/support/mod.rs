@@ -1,4 +1,5 @@
 //! Deterministic AgentRuntime adapter for CLI acceptance, with no model or network dependency.
+pub mod conversations;
 use lugus_agent::reviews::ThesisRevision;
 use lugus_agent::{runtime::*, tools::*};
 use lugus_app::*;
@@ -10,13 +11,13 @@ pub struct FixtureRuntime {
     pub command: FixtureCommand,
     pub receipts: Value,
 }
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 #[serde(untagged)]
 pub enum FixtureCommand {
     Fetch(FetchCommand),
     Binding(BindingWorkflow),
 }
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingWorkflow {
     company_instance_id: String,
@@ -77,14 +78,14 @@ async fn invoke(
     }
     serde_json::from_str(&result.content).map_err(|_| failure("fixture tool returned invalid JSON"))
 }
-impl FixtureRuntime {
+impl FixtureCommand {
     async fn sequence(
-        &mut self,
+        &self,
         request: &RunRequest,
         tools: &dyn ToolExecutor,
         events: &mpsc::Sender<RuntimeEvent>,
-    ) -> AgentResult<()> {
-        let FixtureCommand::Fetch(command) = &self.command else {
+    ) -> AgentResult<Value> {
+        let FixtureCommand::Fetch(command) = self else {
             return self.binding_sequence(request, tools, events).await;
         };
         let mut arguments =
@@ -184,9 +185,7 @@ impl FixtureRuntime {
             json!({"dataset_id":dataset["id"],"kind":kind}),
         )
         .await?;
-        self.receipts =
-            json!({"job":status,"fetch":fetch,"dataset":dataset,"page":page,"view":view});
-        Ok(())
+        Ok(json!({"job":status,"fetch":fetch,"dataset":dataset,"page":page,"view":view}))
     }
 }
 #[async_trait::async_trait]
@@ -217,7 +216,7 @@ impl AgentRuntime for FixtureRuntime {
             biased;
             _ = async { loop { if *cancel.borrow_and_update() { break; }
                 if cancel.changed().await.is_err() { std::future::pending::<()>().await; } } } => RunOutcome::Cancelled,
-            result = tokio::time::timeout(request.limits.timeout, self.sequence(&request, tools, &events)) => { result.map_err(|_| lugus_agent::error::Error::Timeout)??; RunOutcome::Completed }
+            result = tokio::time::timeout(request.limits.timeout, self.command.sequence(&request, tools, &events)) => { self.receipts = result.map_err(|_| lugus_agent::error::Error::Timeout)??; RunOutcome::Completed }
         };
         Ok(RunReport { run_id: request.run_id, outcome, final_text: "Research evidence stored and view request accepted; presentation has not been reported.".into() })
     }
@@ -226,14 +225,14 @@ impl AgentRuntime for FixtureRuntime {
     }
 }
 
-impl FixtureRuntime {
+impl FixtureCommand {
     async fn binding_sequence(
-        &mut self,
+        &self,
         request: &RunRequest,
         tools: &dyn ToolExecutor,
         events: &mpsc::Sender<RuntimeEvent>,
-    ) -> AgentResult<()> {
-        let FixtureCommand::Binding(config) = &self.command else {
+    ) -> AgentResult<Value> {
+        let FixtureCommand::Binding(config) = self else {
             unreachable!()
         };
         let resolution_job = invoke(
@@ -327,7 +326,8 @@ impl FixtureRuntime {
             json!({"dataset_id":dataset["id"],"kind":"price_chart"}),
         )
         .await?;
-        self.receipts = json!({"company_dataset":company_dataset,"companies":companies,"instrument_fetch":instrument_fetch,"binding":binding,"job":job,"fetch":fetch,"dataset":dataset,"page":page,"view":view});
-        Ok(())
+        Ok(
+            json!({"company_dataset":company_dataset,"companies":companies,"instrument_fetch":instrument_fetch,"binding":binding,"job":job,"fetch":fetch,"dataset":dataset,"page":page,"view":view}),
+        )
     }
 }
