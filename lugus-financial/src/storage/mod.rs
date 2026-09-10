@@ -1,5 +1,6 @@
 //! SQLite evidence history. Each page and its continuation cursor commit together.
 pub mod selection;
+pub mod bounded;
 use crate::{
     domain::*,
     error::{Error, ErrorKind, Result},

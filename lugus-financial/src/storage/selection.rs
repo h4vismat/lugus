@@ -76,9 +76,21 @@ impl SqliteRepository {
 }
 impl SelectionRepository for SqliteRepository {
     fn financial_runs(&self, p: &ProviderIdentity) -> Result<Vec<FinancialRunEvidence>> {
+        self.read_financial_runs(p, None)
+    }
+    fn market_runs(&self, p: &ProviderIdentity) -> Result<Vec<MarketRunEvidence>> {
+        self.read_market_runs(p, None)
+    }
+}
+impl SqliteRepository {
+    pub(super) fn read_financial_runs(
+        &self,
+        p: &ProviderIdentity,
+        run_id: Option<i64>,
+    ) -> Result<Vec<FinancialRunEvidence>> {
         validate_identity(p)?;
-        let mut stmt=self.connection.prepare("SELECT id,query,operation,status,filings_cursor,facts_cursor,error,started_at,finished_at FROM runs WHERE provider_id=? ORDER BY id")?;
-        let rows = stmt.query_map([fingerprint(p)?], |r| {
+        let mut stmt=self.connection.prepare("SELECT id,query,operation,status,filings_cursor,facts_cursor,error,started_at,finished_at FROM runs WHERE provider_id=?1 AND (?2 IS NULL OR id=?2) ORDER BY id")?;
+        let rows = stmt.query_map(params![fingerprint(p)?, run_id], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
@@ -111,10 +123,14 @@ impl SelectionRepository for SqliteRepository {
         })
         .collect()
     }
-    fn market_runs(&self, p: &ProviderIdentity) -> Result<Vec<MarketRunEvidence>> {
+    pub(super) fn read_market_runs(
+        &self,
+        p: &ProviderIdentity,
+        run_id: Option<i64>,
+    ) -> Result<Vec<MarketRunEvidence>> {
         validate_identity(p)?;
-        let mut stmt=self.connection.prepare("SELECT id,query,status,cursor,coverage,error,started_at,finished_at FROM market_runs WHERE provider_id=? ORDER BY id")?;
-        let rows = stmt.query_map([fingerprint(p)?], |r| {
+        let mut stmt=self.connection.prepare("SELECT id,query,status,cursor,coverage,error,started_at,finished_at FROM market_runs WHERE provider_id=?1 AND (?2 IS NULL OR id=?2) ORDER BY id")?;
+        let rows = stmt.query_map(params![fingerprint(p)?, run_id], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
