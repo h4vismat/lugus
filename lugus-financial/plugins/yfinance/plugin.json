@@ -1,1 +1,1 @@
-{"id":"yfinance","version":"0.1.0","protocol_version":1,"command":".venv/bin/python","args":["main.py"]}
+{"id":"yfinance","version":"0.2.0","protocol_version":1,"command":".venv/bin/python","args":["main.py"]}

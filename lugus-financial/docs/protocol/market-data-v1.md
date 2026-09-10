@@ -1,6 +1,6 @@
 # Market-data capability v1
 
-Extends protocol/v1.md with optional `"market_data":1` capability. No change to SEC methods. Example plugin identity `yfinance`, version `0.1.0`. Initialize config is `{}`; no API key required.
+Extends protocol/v1.md with optional `"market_data":1` capability. No change to SEC methods. Example plugin identity `yfinance`, version `0.2.0`. Initialize config is `{}`; no API key required.
 
 Method `market_data.daily`, query:
 ```json

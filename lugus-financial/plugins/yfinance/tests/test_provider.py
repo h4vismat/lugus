@@ -143,6 +143,6 @@ class ProviderTests(unittest.TestCase):
         proc=subprocess.run([sys.executable,str(ROOT/'main.py')],input=payload,text=True,capture_output=True,check=True)
         responses=[json.loads(line) for line in proc.stdout.splitlines()]
         self.assertEqual(responses[0]['error']['code'],-32700)
-        self.assertEqual(responses[1]['result']['capabilities'],{'market_data':1})
+        self.assertEqual(responses[1]['result']['capabilities'],{'market_data':1, 'instrument_lookup':1})
 
 if __name__=='__main__': unittest.main()

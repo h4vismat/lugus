@@ -239,7 +239,7 @@ fn real_version_one_migration_preserves_sec_tables() {
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 }
 
 struct Malicious {

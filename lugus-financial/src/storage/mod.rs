@@ -1,6 +1,7 @@
 //! SQLite evidence history. Each page and its continuation cursor commit together.
 pub mod bounded;
 mod bounded_resolution;
+pub mod instruments;
 mod reference_reads;
 pub mod selection;
 use crate::{
@@ -130,7 +131,7 @@ impl SqliteRepository {
                 transaction.execute_batch(include_str!("market-v2.sql"))?;
             }
             1 => transaction.execute_batch(include_str!("market-v2.sql"))?,
-            2..=4 => {}
+            2..=5 => {}
             _ => {
                 return Err(Error::new(
                     ErrorKind::Persistence,
@@ -143,6 +144,9 @@ impl SqliteRepository {
         }
         if version < 4 {
             transaction.execute_batch(include_str!("selection-v4.sql"))?;
+        }
+        if version < 5 {
+            transaction.execute_batch(include_str!("instruments-v5.sql"))?;
         }
         transaction.commit()?;
         Ok(Self { connection })

@@ -484,6 +484,28 @@ impl crate::resolution::CompanyResolutionProvider for Plugin {
     }
 }
 
+#[async_trait]
+impl crate::instruments::InstrumentProvider for Plugin {
+    async fn lookup_instrument(
+        &mut self,
+        query: &crate::instruments::InstrumentLookup,
+    ) -> Result<crate::instruments::InstrumentMetadata> {
+        query.validate()?;
+        self.supports("instrument_lookup")?;
+        let metadata: crate::instruments::InstrumentMetadata = self
+            .call("instrument_lookup.lookup", serde_json::to_value(query)?)
+            .await?;
+        if metadata.validate_for(query).is_err() {
+            let _ = self.close().await;
+            return Err(Error::new(
+                ErrorKind::Protocol,
+                "invalid instrument metadata or source identity",
+            ));
+        }
+        Ok(metadata)
+    }
+}
+
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;

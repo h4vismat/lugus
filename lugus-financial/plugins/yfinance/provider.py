@@ -11,17 +11,12 @@ import sys
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from common import ProviderError, YFINANCE_VERSION
+from instruments import fetch_metadata, lookup_params, project_metadata
+
 MAX_LINE = 32 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024
-YFINANCE_VERSION = '1.7.0'
-
-
-class ProviderError(Exception):
-    def __init__(self, kind, message, code=-32000):
-        super().__init__(message)
-        self.kind = kind
-        self.code = code
 
 
 def invalid(message):
@@ -173,8 +168,9 @@ def fetch_history(symbol, options):
 
 
 class Provider:
-    def __init__(self, fetch=fetch_history, clock=utc_now):
+    def __init__(self, fetch=fetch_history, clock=utc_now, fetch_metadata=fetch_metadata):
         self.fetch, self.clock = fetch, clock
+        self.fetch_metadata = fetch_metadata
         self.initialized = False
         self.snapshot = None
         self.next_cursor = None
@@ -188,7 +184,15 @@ class Provider:
         if params.get('config') != {}:
             raise ProviderError('configuration', 'Yfinance configuration must be an empty object')
         self.initialized = True
-        return dict(protocol_version=1,plugin_id='yfinance',plugin_version='0.1.0',capabilities={'market_data':1})
+        return dict(protocol_version=1,plugin_id='yfinance',plugin_version='0.2.0',capabilities={'market_data':1, 'instrument_lookup':1})
+
+    def lookup_instrument(self, params):
+        if not self.initialized:
+            raise ProviderError('configuration', 'Initialize the provider first')
+        query = lookup_params(params)
+        with redirect_stdout(sys.stderr):
+            source = self.fetch_metadata(query['instrument']['value'])
+        return project_metadata(source, query, self.clock())
 
     def daily(self, params):
         if not self.initialized:
@@ -226,6 +230,8 @@ def handle(provider, request):
         params = request.get('params',{})
         if request['method'] == 'initialize':
             result = provider.initialize(params)
+        elif request['method'] == 'instrument_lookup.lookup':
+            result = provider.lookup_instrument(params)
         elif request['method'] == 'market_data.daily':
             result = provider.daily(params)
         else:

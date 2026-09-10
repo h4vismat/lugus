@@ -15,3 +15,5 @@ pub mod market_data;
 pub mod resolution;
 
 pub mod selection;
+
+pub mod instruments;

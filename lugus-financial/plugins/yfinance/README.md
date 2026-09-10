@@ -1,8 +1,9 @@
-# Yfinance daily market data plugin
+# Yfinance market data and instrument lookup plugin 0.2.0
 
-An independently installed Python adapter for Lugus protocol v1 and `market_data: 1`.
+An independently installed Python adapter for Lugus protocol v1, `market_data: 1` and
+`instrument_lookup: 1`.
 It retrieves daily historical bars for explicit `yahoo:symbol` identifiers. No API key,
-company identity inference, or fallback provider is used.
+company binding decision, or fallback provider is used.
 
 From the repository root, install Python 3.10+ and the pinned upstream library:
 
@@ -66,3 +67,26 @@ Upstream references checked September 9, 2026:
 [tagged history implementation](https://github.com/ranaroussi/yfinance/blob/1.7.0/yfinance/scrapers/history.py).
 yfinance is unofficial, unaffiliated with Yahoo, and intended for personal/research use;
 Yahoo's terms govern use of its data.
+
+## Source instrument lookup
+
+Version 0.2.0 adds `instrument_lookup.lookup` for explicit native instruments:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"instrument_lookup.lookup","params":{"instrument":{"namespace":"yahoo:symbol","value":"AAPL"}}}
+```
+
+Lookup uses public `Ticker.history()` over five daily bars to prime chart metadata,
+then reads `symbol`, `longName`, `exchangeName`, and `instrumentType` through public
+`Ticker.get_history_metadata()`. The request symbol never fills missing source identity.
+`Ticker.get_info()` is excluded because yfinance 1.7.0 overwrites its symbol with the
+request. Optional fields remain null; no CIK or security identifiers are invented.
+The result includes a SHA-256 checksum of the bounded canonical four-field projection,
+a source URL and retrieval timestamp. Missing/wrong source symbol fails validation.
+The existing daily pagination snapshot is unaffected by lookup.
+
+See [instrument lookup v1](../../docs/protocol/instrument-lookup-v1.md) for field bounds,
+checksum canonicalization, exact source/library limitations and immutable storage rules.
+The suite includes optional offline characterization of the pinned library using synthetic
+chart JSON; it performs no live requests. Run it with the plugin virtual environment to
+include that test; dependency-free execution skips only that characterization.
