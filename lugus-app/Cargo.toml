@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lugus-agent = { path = "../lugus-agent" }
+sha2 = "0.10"
 async-trait = "0.1.92"
 tokio = { version = "1", features = ["process", "io-util", "time", "rt-multi-thread", "macros", "sync"] }
 chrono = { version = "0.4.45", features = ["serde"] }

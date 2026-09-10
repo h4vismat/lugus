@@ -12,3 +12,5 @@ pub mod provider;
 pub mod worker;
 pub use provider::*;
 pub use worker::*;
+
+pub mod agent_contract;
