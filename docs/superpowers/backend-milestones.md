@@ -4,7 +4,7 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The next milestone is **durable conversations and research workspaces**. Company-to-market-instrument binding is implemented on local branch `codex/instrument-binding` in worktree `/private/tmp/lugus-backend-development`, through `20d5fb8`. This branch includes the completed production application runtime and company-resolution/observation foundations. It remains local and unmerged. Read the application README and completed binding plan before starting the next milestone.
+The current milestone is **durable conversations and research workspaces**, in progress on local branch `codex/durable-conversations` in `/private/tmp/lugus-backend-development`. The user approved its design; follow `docs/superpowers/plans/2026-09-10-durable-conversations.md` and its execution ledger rather than restarting implementation. Company-to-market-instrument binding is implemented on local branch `codex/instrument-binding` in worktree `/private/tmp/lugus-backend-development`, through `20d5fb8`. This branch includes the completed production application runtime and company-resolution/observation foundations. It remains local and unmerged. Read the application README and completed binding plan before starting the next milestone.
 
 First check repository/branch state. Company resolution and observation selection were implemented in `eea83bf`; application runtime and lifecycle fixes extend through `403aa1d`, with its completion documentation at `781a539`. Binding work builds on that commit. These features have not been merged into `main`; do not infer missing implementation from a checkout of `main`, repeat the work, or overwrite pending documents. Temporary worktree paths may change; branch and commit identify the implementation.
 
@@ -129,6 +129,8 @@ This full workflow is not yet implemented. The application runtime and company-t
 
 Paths are relative to the repository root; inspect the implementation branch when a file is absent from the current checkout.
 
+- `docs/superpowers/specs/2026-09-10-durable-conversations-design.md` — approved conversation persistence/recovery boundaries.
+- `docs/superpowers/plans/2026-09-10-durable-conversations.md` — current milestone execution plan.
 - `docs/superpowers/specs/2026-09-10-instrument-binding-design.md` — approved automatic source-supported binding design.
 - `docs/superpowers/plans/2026-09-10-instrument-binding.md` — completed binding implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-application-runtime-design.md` — approved runtime boundaries.
