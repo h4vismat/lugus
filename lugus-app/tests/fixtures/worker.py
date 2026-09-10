@@ -6,8 +6,9 @@ import pathlib
 import select
 import sys
 
-FILING_HTML = b'''<!doctype html><html><head><meta charset="utf-8"><title>Hidden title</title><style>.x{display:none}</style></head><body><h1>Risk factors</h1><p>Revenue &amp; cash <b>grew</b>.</p><ix:hidden><ix:nonFraction>999999</ix:nonFraction></ix:hidden><p>S\xc3\xa3o Paulo: <ix:nonFraction>(1,234.50)</ix:nonFraction> USD</p><table><tr><th>Year</th><th>Revenue</th></tr><tr><td>2025</td><td>1,234.50</td></tr></table><script>bad()</script><template>secret</template><p hidden>hidden</p><p style="display: none">invisible</p></body></html>'''
-FILING_HTML_REVISED = FILING_HTML.replace(b"Revenue &amp; cash <b>grew</b>.", b"Revenue &amp; cash <b>fell sharply</b>.")
+FILING_HTML = b'''<!doctype html><html><head><meta charset="utf-8"><title>Hidden title</title><style>.x{display:none}</style></head><body><h1>Risk factors</h1><p>Revenue  &amp;
+ cash <b>grew</b>.</p><ix:hidden><ix:nonFraction>999999</ix:nonFraction></ix:hidden><p>S\xc3\xa3o Paulo: <ix:nonFraction>(1,234.50)</ix:nonFraction> USD</p><table><tr><th>Year</th><th>Revenue</th></tr><tr><td>2025</td><td>1,234.50</td></tr></table><script>bad()</script><template>secret</template><p hidden>hidden</p><p style="display: none">invisible</p></body></html>'''
+FILING_HTML_REVISED = FILING_HTML.replace(b"Revenue  &amp;\n cash <b>grew</b>.", b"Revenue  &amp;\n cash <b>fell sharply</b>.")
 
 for line in sys.stdin:
     req = json.loads(line)

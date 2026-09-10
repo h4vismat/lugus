@@ -225,16 +225,33 @@ fn actual_html_passage_conversation_survives_revision_tab_close_and_provider_rem
         &[id(&original_passage)],
     );
     assert_eq!(source["passage"]["quote"], quote);
-    assert!(source["sources"].as_array().unwrap().len() >= 3);
-    let source_nodes: std::collections::BTreeSet<_> = source["sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|source| source["node_id"].as_u64().unwrap())
-        .collect();
-    assert!(
-        source_nodes.len() >= 3,
-        "selection did not cross text nodes"
+    assert_eq!(
+        source["passage"]["representation"]["document"]["checksum"],
+        original_checksum
+    );
+    assert_eq!(
+        source["passage"]["mappings"],
+        json!([
+            {"start":13,"end":20,"kind":"exact","source":{"node_id":13,"start":0,"end":7}},
+            {"start":20,"end":21,"kind":"normalized","source":{"node_id":13,"start":7,"end":9}},
+            {"start":21,"end":22,"kind":"exact","source":{"node_id":13,"start":9,"end":10}},
+            {"start":22,"end":23,"kind":"normalized","source":{"node_id":13,"start":10,"end":12}},
+            {"start":23,"end":28,"kind":"exact","source":{"node_id":13,"start":12,"end":17}},
+            {"start":28,"end":32,"kind":"exact","source":{"node_id":15,"start":0,"end":4}},
+            {"start":32,"end":33,"kind":"exact","source":{"node_id":16,"start":0,"end":1}},
+        ])
+    );
+    assert_eq!(
+        source["sources"],
+        json!([
+            {"node_id":13,"path":[1,1,1,0],"start":0,"end":7,"text":"Revenue"},
+            {"node_id":13,"path":[1,1,1,0],"start":7,"end":9,"text":"  "},
+            {"node_id":13,"path":[1,1,1,0],"start":9,"end":10,"text":"&"},
+            {"node_id":13,"path":[1,1,1,0],"start":10,"end":12,"text":"\n "},
+            {"node_id":13,"path":[1,1,1,0],"start":12,"end":17,"text":"cash "},
+            {"node_id":15,"path":[1,1,1,1,0],"start":0,"end":4,"text":"grew"},
+            {"node_id":16,"path":[1,1,1,2],"start":0,"end":1,"text":"."},
+        ])
     );
 
     fixture.write(
@@ -274,6 +291,13 @@ fn actual_html_passage_conversation_survives_revision_tab_close_and_provider_rem
     );
     assert_eq!(tools["items"].as_array().unwrap().len(), 1);
     assert_eq!(tools["items"][0]["intent"]["name"], "lugus_resolve_passage");
+    let runtime_source: Value = serde_json::from_str(
+        tools["items"][0]["outcome"]["result"]["content"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(runtime_source, source);
     let messages = fixture.conversation("messages", "offline.json", &[conversation_id, "0", "10"]);
     let answer: Value =
         serde_json::from_str(messages["items"][1]["text"].as_str().unwrap()).unwrap();
@@ -397,18 +421,22 @@ fn actual_html_passage_conversation_survives_revision_tab_close_and_provider_rem
     );
     std::fs::remove_file(fixture.p("manifest.json")).unwrap();
 
-    let reopened = fixture.legacy(
+    let reopened_passage = fixture.legacy(
         "read-passage",
         "offline.json",
         workspace_id,
         "reopen-original",
         &[id(&original_passage)],
     );
-    assert_eq!(reopened["quote"], quote);
-    assert_eq!(
-        reopened["representation"]["document"]["checksum"],
-        original_checksum
+    let reopened_source = fixture.legacy(
+        "resolve-passage",
+        "offline.json",
+        workspace_id,
+        "reopen-source",
+        &[id(&original_passage)],
     );
+    assert_eq!(reopened_passage, original_passage);
+    assert_eq!(reopened_source, source);
     assert_eq!(
         fixture.conversation("context", "offline.json", &[conversation_id, run_id],),
         frozen_context

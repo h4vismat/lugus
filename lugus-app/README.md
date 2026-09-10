@@ -110,7 +110,24 @@ its UTF-8 byte range, and write `/tmp/lugus-passage-demo/create-passage.json`:
 ```
 
 The synthetic fixture fixes this selection at `[13,33)`, crossing three parsed text
-nodes. Create and inspect it with:
+nodes. The decoded first node is `Revenue  &\n cash `, so the stored mappings must be
+the following literal canonical/source ranges:
+
+```text
+13..20 exact      node 13, 0..7    "Revenue"
+20..21 normalized node 13, 7..9    "  "
+21..22 exact      node 13, 9..10   "&"
+22..23 normalized node 13, 10..12  "\n "
+23..28 exact      node 13, 12..17  "cash "
+28..32 exact      node 15, 0..4    "grew"
+32..33 exact      node 16, 0..1    "."
+```
+
+The corresponding source paths are `[1,1,1,0]` for node 13,
+`[1,1,1,1,0]` for node 15, and `[1,1,1,2]` for node 16. These literals demonstrate
+entity decoding, collapsed-whitespace contributor ranges, and cross-node selection;
+they are independent expectations rather than values computed from the extractor.
+Create and inspect the passage with:
 
 ```sh
 target/debug/lugus-research create-passage /tmp/lugus-passage-demo/offline.json W passage-original /tmp/lugus-passage-demo/create-passage.json
@@ -152,7 +169,9 @@ the new representation fails; read the new canonical text and explicitly create 
 passage for `Revenue & cash fell sharply.`. After closing any document tab with
 `conversation layout`, remove `manifest.json`. `read-passage`, `resolve-passage`,
 `conversation context`, and the closed `conversation view` remain available through
-`offline.json`, preserving the first passage and frozen turn byte for byte.
+`offline.json`. Compare the complete reopened `Passage` and `PassageSource` JSON values
+to the values captured before the revision, and compare the complete frozen context;
+all must remain byte-for-byte equal.
 
 Version 1 extracts only `text/html`, including visible Inline XBRL facts. PDF, OCR,
 XML/SGML, XHTML, browser layout and desktop highlighting are deferred. UTF-8 is the
