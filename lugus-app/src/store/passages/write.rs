@@ -254,13 +254,7 @@ impl PassageStore for SqliteApplicationStore {
             h.text_bytes,
             limits.max_passage_bytes.min(max),
         )?;
-        let mappings = read::mappings(&tx, &h, request.start, request.end, max).map_err(|e| {
-            if e.kind == ErrorKind::Storage {
-                invalid()
-            } else {
-                e
-            }
-        })?;
+        let mappings = read::mappings(&tx, &h, request.start, request.end, max)?;
         let p = build_passage(
             id,
             scope.clone(),

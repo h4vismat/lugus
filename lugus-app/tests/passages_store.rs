@@ -685,3 +685,114 @@ fn retries_return_original_without_allocating_new_ids() {
         p.id
     );
 }
+
+#[test]
+fn missing_normalized_contributor_rejects_new_passage_without_inserting_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("app");
+    let fin = dir.path().join("fin");
+    let mut store = open(&db, &fin, 1);
+    let dataset = dataset(&mut store, &fin, "<p>é <b> </b> cash</p>");
+    let representation = prepare(&mut store, &dataset.id);
+    let sql = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(sql.execute("DELETE FROM text_mappings WHERE representation=?1 AND ordinal=(SELECT min(ordinal) FROM text_mappings WHERE representation=?1 AND start=2 AND end=3)", [&representation.id]).unwrap(), 1);
+    // Two surviving contributors still cover the canonical space completely.
+    assert_eq!(
+        sql.query_row(
+            "SELECT count(*) FROM text_mappings WHERE representation=?1 AND start=2 AND end=3",
+            [&representation.id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+    let request = CreatePassageRequest {
+        representation_id: representation.id,
+        start: 0,
+        end: 7,
+        expected_text: "é cash".into(),
+    };
+    assert_eq!(
+        store
+            .create_passage(&scope(), &request, &TextLimits::default(), 100_000)
+            .unwrap_err()
+            .kind,
+        ErrorKind::Storage
+    );
+    assert_eq!(
+        sql.query_row("SELECT count(*) FROM passage_requests", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sql.query_row(
+            "SELECT count(*) FROM app_records WHERE category='passage'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn passage_creation_preserves_mapping_checksum_and_sqlite_storage_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("app");
+    let fin = dir.path().join("fin");
+    let mut store = open(&db, &fin, 1);
+    let dataset = dataset(&mut store, &fin, "<p>Revenue &amp; cash grew.</p>");
+    let representation = prepare(&mut store, &dataset.id);
+    let sql = rusqlite::Connection::open(&db).unwrap();
+    sql.execute("UPDATE text_mappings SET checksum=printf('%064d',0)", [])
+        .unwrap();
+    assert_eq!(
+        store
+            .create_passage(
+                &scope(),
+                &request(&representation.id),
+                &TextLimits::default(),
+                100_000
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::Storage
+    );
+    sql.execute(
+        "UPDATE text_mappings SET payload='{',checksum=?1",
+        [text_checksum("{")],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .create_passage(
+                &scope(),
+                &request(&representation.id),
+                &TextLimits::default(),
+                100_000
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::Storage
+    );
+    sql.execute_batch("DROP TABLE text_mappings").unwrap();
+    assert_eq!(
+        store
+            .create_passage(
+                &scope(),
+                &request(&representation.id),
+                &TextLimits::default(),
+                100_000
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::Storage
+    );
+    assert_eq!(
+        sql.query_row("SELECT count(*) FROM passage_requests", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}

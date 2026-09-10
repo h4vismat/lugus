@@ -156,6 +156,18 @@ pub(super) fn mappings(
     end: usize,
     max: usize,
 ) -> Result<Vec<SourceMapping>> {
+    // The scoped, checksummed header bounds this covering-index inventory scan.
+    // Canonical coverage alone cannot detect a deleted overlapping contributor.
+    // No mapping payload is loaded here; even corrupt excess rows stop at cap + 1.
+    let expected = h.mapping_count as i64;
+    let inventory: (i64, i64, i64) = db.query_row(
+        "SELECT count(*),coalesce(min(ordinal),0),coalesce(max(ordinal),-1) FROM (SELECT ordinal FROM text_mappings WHERE representation=?1 ORDER BY ordinal LIMIT ?2)",
+        params![h.id, expected + 1],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).map_err(storage)?;
+    if inventory != (expected, 0, expected - 1) {
+        return Err(corrupt());
+    }
     let (count,bytes,bad):(i64,i64,i64)=db.query_row("SELECT count(*),coalesce(sum(length(CAST(payload AS BLOB))),0),coalesce(sum(start<0 OR end<=start OR ordinal<0 OR ordinal>=?4 OR length(CAST(checksum AS BLOB))!=64 OR length(CAST(payload AS BLOB))>4096),0) FROM text_mappings WHERE representation=?1 AND end>?2 AND start<?3",params![h.id,start as i64,end as i64,h.mapping_count as i64],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(storage)?;
     bounded(count, h.mapping_count.min(max))?;
     bounded(bytes, max)?;
@@ -196,6 +208,17 @@ pub(super) fn mappings(
         previous = Some(m.clone());
         result.push(m);
     }
+    // A valid selection of structural separators is a caller error. Every other
+    // clipping failure denotes damaged stored mappings, not an invalid request.
+    if result.first().is_some_and(|m| m.start <= start)
+        && result.last().is_some_and(|m| m.end >= end)
+        && result
+            .iter()
+            .all(|m| m.kind == MappingKind::Synthetic && m.source.is_none() && m.end - m.start == 1)
+        && result.windows(2).all(|pair| pair[0].end == pair[1].start)
+    {
+        return Err(invalid());
+    }
     clip_mappings(&result, start, end).map_err(|_| corrupt())
 }
 pub(super) fn passage(
@@ -228,7 +251,14 @@ pub(super) fn passage(
         h.text_bytes,
         TextLimits::default().max_passage_bytes,
     )?;
-    if text != p.quote || mappings(db, &h, p.start, p.end, max)? != p.mappings {
+    let current_mappings = mappings(db, &h, p.start, p.end, max).map_err(|e| {
+        if e.kind == ErrorKind::InvalidInput {
+            corrupt()
+        } else {
+            e
+        }
+    })?;
+    if text != p.quote || current_mappings != p.mappings {
         return Err(corrupt());
     }
     check_envelope(&p, max)?;
