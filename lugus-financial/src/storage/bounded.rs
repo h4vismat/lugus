@@ -97,9 +97,9 @@ impl SqliteRepository {
         let transaction = self.connection.unchecked_transaction()?;
         let provider_key = fingerprint(provider)?;
         let metadata_sql = if market {
-            "SELECT length(CAST(query AS BLOB))+coalesce(length(CAST(cursor AS BLOB)),0)+coalesce(length(CAST(coverage AS BLOB)),0)+coalesce(length(CAST(error AS BLOB)),0)+length(CAST(started_at AS BLOB))+coalesce(length(CAST(finished_at AS BLOB)),0) FROM market_runs WHERE id=?1 AND provider_id=?2"
+            "SELECT length(CAST(status AS BLOB))+length(CAST(query AS BLOB))+coalesce(length(CAST(cursor AS BLOB)),0)+coalesce(length(CAST(coverage AS BLOB)),0)+coalesce(length(CAST(error AS BLOB)),0)+length(CAST(started_at AS BLOB))+coalesce(length(CAST(finished_at AS BLOB)),0) FROM market_runs WHERE id=?1 AND provider_id=?2"
         } else {
-            "SELECT length(CAST(query AS BLOB))+length(CAST(operation AS BLOB))+coalesce(length(CAST(filings_cursor AS BLOB)),0)+coalesce(length(CAST(facts_cursor AS BLOB)),0)+coalesce(length(CAST(error AS BLOB)),0)+length(CAST(started_at AS BLOB))+coalesce(length(CAST(finished_at AS BLOB)),0) FROM runs WHERE id=?1 AND provider_id=?2"
+            "SELECT length(CAST(status AS BLOB))+length(CAST(query AS BLOB))+length(CAST(operation AS BLOB))+coalesce(length(CAST(filings_cursor AS BLOB)),0)+coalesce(length(CAST(facts_cursor AS BLOB)),0)+coalesce(length(CAST(error AS BLOB)),0)+length(CAST(started_at AS BLOB))+coalesce(length(CAST(finished_at AS BLOB)),0) FROM runs WHERE id=?1 AND provider_id=?2"
         };
         let metadata: i64 = transaction
             .query_row(metadata_sql, params![run_id, provider_key], |r| r.get(0))
