@@ -10,6 +10,10 @@ impl SqliteApplicationStore {
         let limits = &self.conversation_limits;
         let max = limits.selected_bytes.min(self.limits.max_output_bytes);
         match selected {
+            SelectedReference::Passage { id } => FrozenReference::from_passage(
+                &crate::PassageStore::read_passage(self, scope, id, max)?,
+                limits,
+            ),
             SelectedReference::View { id } => FrozenReference::from_view(
                 &self.read::<ViewReceipt>(scope, id, "view", max)?,
                 limits,

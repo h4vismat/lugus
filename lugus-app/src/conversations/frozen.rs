@@ -39,6 +39,22 @@ pub struct FrozenView {
 }
 
 impl FrozenReference {
+    /// Freeze only a passage obtained from a scoped trusted store read.
+    pub fn from_passage(
+        passage: &crate::passages::Passage,
+        limits: &ConversationLimits,
+    ) -> Result<Self> {
+        limits.validate()?;
+        validate_passage(passage)?;
+        Self::freeze(
+            SelectedReference::Passage {
+                id: passage.id.clone(),
+            },
+            passage,
+            limits,
+        )
+    }
+
     /// Caller must use the application's scoped read of offset zero. No latest query is performed.
     pub fn from_dataset(page: &DatasetPage, limits: &ConversationLimits) -> Result<Self> {
         limits.validate()?;
@@ -116,6 +132,12 @@ impl FrozenReference {
             return Err(invalid("frozen reference integrity check failed"));
         }
         let payload_id = match &self.reference {
+            SelectedReference::Passage { .. } => {
+                let payload: crate::passages::Passage =
+                    decode_frozen(&self.serialized, limits.selected_bytes)?;
+                validate_passage(&payload)?;
+                payload.id
+            }
             SelectedReference::Dataset { .. } => {
                 let payload: FrozenDataset =
                     decode_frozen(&self.serialized, limits.selected_bytes)?;
@@ -220,4 +242,93 @@ fn decode_frozen<T: DeserializeOwned + Serialize>(serialized: &str, max_bytes: u
         ));
     }
     Ok(payload)
+}
+
+// Restoration checks the self-contained immutable contract without looking up current evidence.
+fn validate_passage(p: &crate::passages::Passage) -> Result<()> {
+    use crate::passages::{MappingKind, TextLimits, text_checksum};
+    let h = &p.representation;
+    let cap = TextLimits::default();
+    p.scope.validate()?;
+    for id in [
+        &p.id,
+        &h.id,
+        &h.workspace_id,
+        &h.repository_id,
+        &h.dataset_id,
+        &h.extractor.format,
+        &h.extractor.policy,
+        &h.extractor.parser,
+        &h.extractor.decoder,
+        &h.decoder,
+        &h.document.provider.instance_id,
+        &h.document.provider.plugin_id,
+        &h.document.provider.plugin_version,
+    ] {
+        validate_id(id)?;
+    }
+    let digest = |s: &str| {
+        s.len() == 64
+            && s.bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    };
+    if h.workspace_id != p.scope.workspace_id
+        || !digest(&h.text_checksum)
+        || !digest(&h.document.checksum)
+        || p.quote_checksum != text_checksum(&p.quote)
+        || p.quote.is_empty()
+        || p.quote.len() > cap.max_passage_bytes
+        || p.end.checked_sub(p.start) != Some(p.quote.len())
+        || p.end > h.text_bytes
+        || h.text_bytes > cap.max_text_bytes
+        || h.source_node_count == 0
+        || h.source_node_count > cap.max_nodes
+        || h.mapping_count > cap.max_mappings
+        || p.mappings.is_empty()
+        || p.mappings.len() > h.mapping_count
+        || h.document.source_url.is_empty()
+        || h.document.media_type.is_empty()
+    {
+        return Err(invalid("frozen passage metadata is inconsistent"));
+    }
+    let mut end = p.start;
+    let mut previous: Option<&crate::passages::SourceMapping> = None;
+    let mut source_backed = false;
+    for m in &p.mappings {
+        let overlap = previous.is_some_and(|prior| {
+            prior.kind == MappingKind::Normalized
+                && m.kind == MappingKind::Normalized
+                && prior.start == m.start
+                && prior.end == m.end
+        });
+        if m.start < p.start || m.end > p.end || m.start >= m.end || (m.start != end && !overlap) {
+            return Err(invalid("frozen passage mappings do not cover its quote"));
+        }
+        let selected = p
+            .quote
+            .get(m.start - p.start..m.end - p.start)
+            .ok_or_else(|| invalid("frozen passage mapping splits UTF-8"))?;
+        match (&m.kind, &m.source) {
+            (MappingKind::Synthetic, None) if selected.chars().all(char::is_whitespace) => (),
+            (MappingKind::Exact | MappingKind::Normalized, Some(source)) => {
+                if source.start >= source.end
+                    || source.end > cap.max_source_bytes
+                    || source.node_id as usize >= cap.max_nodes
+                    || (m.kind == MappingKind::Exact
+                        && source.end - source.start != m.end - m.start)
+                    || (m.kind == MappingKind::Normalized && selected != " ")
+                {
+                    return Err(invalid("frozen passage source interval is inconsistent"));
+                }
+                source_backed = true;
+            }
+            _ => return Err(invalid("frozen passage mapping kind is inconsistent")),
+        }
+        end = m.end;
+        previous = Some(m);
+    }
+    if end != p.end || !source_backed {
+        return Err(invalid("frozen passage requires complete source mappings"));
+    }
+    Ok(())
 }

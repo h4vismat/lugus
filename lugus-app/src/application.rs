@@ -2,7 +2,9 @@
 use crate::*;
 mod bindings;
 mod conversations;
+mod passages;
 pub use bindings::BoundPriceRequest;
+pub use passages::TextPreparationOptions;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -108,6 +110,8 @@ struct RegisteredJob {
 }
 struct Admission {
     closed: bool,
+    preparations: BTreeMap<u64, passages::PreparationJob>,
+    next_preparation: u64,
     workers: BTreeMap<String, WorkerHandle>,
     jobs: BTreeMap<String, RegisteredJob>,
     terminals: VecDeque<String>,
@@ -125,6 +129,7 @@ struct Inner {
     store: Arc<Mutex<Box<dyn ApplicationStore>>>,
     ids: Mutex<Box<dyn IdSource>>,
     limits: Limits,
+    text_options: TextPreparationOptions,
     bounds: HostBounds,
     slots: WorkerSlots,
     events: broadcast::Sender<ApplicationEvent>,
@@ -152,8 +157,36 @@ impl Application {
         bounds: HostBounds,
         ids: Box<dyn IdSource>,
     ) -> Result<Self> {
+        Self::start_with_text_options(
+            providers,
+            repositories,
+            store,
+            limits,
+            bounds,
+            ids,
+            TextPreparationOptions::default(),
+        )
+        .await
+    }
+    /// Inject a trusted cooperative extractor and independent bounded local preparation capacity.
+    pub async fn start_with_text_options(
+        providers: Vec<ConfiguredProvider>,
+        repositories: Arc<dyn RepositoryFactory>,
+        store: Box<dyn ApplicationStore>,
+        limits: Limits,
+        bounds: HostBounds,
+        ids: Box<dyn IdSource>,
+        mut text_options: TextPreparationOptions,
+    ) -> Result<Self> {
         limits.validate()?;
         bounds.validate()?;
+        text_options.limits = text_options.limits.effective(&limits)?;
+        if !(1..=64).contains(&text_options.max_concurrent_preparations) {
+            return Err(error(
+                ErrorKind::InvalidInput,
+                "invalid text preparation capacity",
+            ));
+        }
         let catalog = Catalog::new(
             providers
                 .iter()
@@ -182,6 +215,8 @@ impl Application {
                 catalog: Arc::new(Mutex::new(catalog)),
                 admission: Mutex::new(Admission {
                     closed: false,
+                    preparations: BTreeMap::new(),
+                    next_preparation: 0,
                     workers: BTreeMap::new(),
                     jobs: BTreeMap::new(),
                     terminals: VecDeque::new(),
@@ -203,6 +238,7 @@ impl Application {
                 store: Arc::new(Mutex::new(store)),
                 ids: Mutex::new(ids),
                 limits,
+                text_options,
                 bounds,
                 slots,
                 events,
@@ -611,13 +647,21 @@ impl Application {
                         job.status.subscribe()
                     })
                     .collect();
+                let preparations = state
+                    .preparations
+                    .values()
+                    .map(|job| {
+                        job.cancel();
+                        job.done.clone()
+                    })
+                    .collect();
                 let (sender, completion) = watch::channel(None);
                 state.shutdown = Some(completion.clone());
                 let app = self.clone();
                 // A single host-owned shutdown task retains all stop and job completion
                 // waits, even if every caller drops its shutdown future.
                 tokio::spawn(async move {
-                    let result = app.shutdown_owned(pending).await;
+                    let result = app.shutdown_owned(pending, preparations).await;
                     sender.send_replace(Some(result));
                 });
                 completion
@@ -635,7 +679,11 @@ impl Application {
             })?;
         }
     }
-    async fn shutdown_owned(&self, mut pending: Vec<watch::Receiver<JobStatus>>) -> Result<()> {
+    async fn shutdown_owned(
+        &self,
+        mut pending: Vec<watch::Receiver<JobStatus>>,
+        mut preparations: Vec<watch::Receiver<bool>>,
+    ) -> Result<()> {
         let mut stops = tokio::task::JoinSet::new();
         for id in self.inner.providers.keys() {
             let app = self.clone();
@@ -659,6 +707,16 @@ impl Application {
                     .changed()
                     .await
                     .map_err(|_| error(ErrorKind::Unavailable, "job supervision stopped"))?;
+            }
+        }
+        for done in &mut preparations {
+            while !*done.borrow_and_update() {
+                done.changed().await.map_err(|_| {
+                    error(
+                        ErrorKind::Unavailable,
+                        "text preparation supervision stopped",
+                    )
+                })?;
             }
         }
         failure.map_or(Ok(()), Err)

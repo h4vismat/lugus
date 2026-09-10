@@ -113,12 +113,16 @@ pub enum SelectedReference {
     Dataset { id: String },
     View { id: String },
     Binding { id: String },
+    Passage { id: String },
 }
 
 impl SelectedReference {
     pub fn id(&self) -> &str {
         match self {
-            Self::Dataset { id } | Self::View { id } | Self::Binding { id } => id,
+            Self::Dataset { id }
+            | Self::View { id }
+            | Self::Binding { id }
+            | Self::Passage { id } => id,
         }
     }
     pub fn validate(&self) -> Result<()> {

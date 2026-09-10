@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod bindings;
+mod passages;
 
 pub struct ResearchExecutor {
     application: Application,
@@ -28,6 +29,7 @@ impl ResearchExecutor {
         let mut specs = fetch_tool_specs(&offering);
         specs.extend(cached_tool_specs(application.limits()));
         specs.extend(bindings::tool_specs(application.limits(), &offering));
+        specs.extend(passages::tool_specs(&application));
         let output_bytes = application.limits().max_output_bytes;
         Ok(Self {
             output_bytes,
@@ -62,6 +64,9 @@ impl ResearchExecutor {
                 "tool was not offered for this turn",
                 false,
             ));
+        }
+        if passages::NAMES.contains(&call.name.as_str()) {
+            return self.passage_call(&scope, call).await;
         }
         if bindings::NAMES.contains(&call.name.as_str()) {
             return self.binding_call(&scope, call).await;
