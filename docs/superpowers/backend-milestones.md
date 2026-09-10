@@ -4,13 +4,11 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The current milestone is **company-to-market-instrument binding**, in progress on local branch `codex/instrument-binding` in `/private/tmp/lugus-backend-development`. The user approved automatic agent-created bindings backed by saved company/listing and market-provider metadata. Follow the approved binding design and implementation plan; no routine manual mapping confirmation is required.
+The next milestone is **durable conversations and research workspaces**. Company-to-market-instrument binding is implemented on local branch `codex/instrument-binding` in worktree `/private/tmp/lugus-backend-development`, through `20d5fb8`. This branch includes the completed production application runtime and company-resolution/observation foundations. It remains local and unmerged. Read the application README and completed binding plan before starting the next milestone.
 
-Production application runtime and capability routing are implemented on local branch `codex/application-runtime` in worktree `/private/tmp/lugus-backend-development`, through implementation/fix commit `403aa1d`, based on `eea83bf`. The branch remains local and unmerged. Read the application README and completed plan before starting the next milestone.
+First check repository/branch state. Company resolution and observation selection were implemented in `eea83bf`; application runtime and lifecycle fixes extend through `403aa1d`, with its completion documentation at `781a539`. Binding work builds on that commit. These features have not been merged into `main`; do not infer missing implementation from a checkout of `main`, repeat the work, or overwrite pending documents. Temporary worktree paths may change; branch and commit identify the implementation.
 
-First check repository/branch state. Company resolution and observation selection were implemented in commit `eea83bf` on branch `codex/company-resolution-observations`. The application-runtime branch includes that commit; neither feature has been merged into `main`. Do not infer missing implementation from a checkout of `main`, repeat the work, or overwrite pending documents. Temporary worktree paths may change; the branch and commit identify the implementation.
-
-The application-runtime implementation includes that foundation. Integration into `main` is a separate action; this document does not authorize publishing, pushing, or merging.
+Integration into `main` is a separate action; this document does not authorize publishing, pushing, or merging.
 
 ## Established product and architectural decisions
 
@@ -71,13 +69,23 @@ See [`lugus-app/README.md`](../../lugus-app/README.md) for the public API, limit
 
 **Exit met:** manual and actual `AgentRuntime` calls use the same production application operations, with explicit scope/provenance and correct unavailable-provider behavior.
 
-### 2. Company-to-market-instrument binding
+### 2. Company-to-market-instrument binding — complete
 
-Connect a resolved company to a selected market provider's instrument through agent-created, source-supported bindings. The agent selects the exact saved company observation and listing, looks up metadata from the chosen market provider, and requests a binding. A pure versioned application policy checks issuer identity, ticker, exchange, and instrument type before saving immutable provenance. Clear matches proceed automatically; incomplete or conflicting evidence cannot create a binding. Preserve multiple listings/share classes, ambiguity, and history.
+Implemented through `20d5fb8`:
 
-SEC source data already retains company identifiers and listings. Market-provider metadata supplies the other side of the association; a successful price fetch or an echoed request symbol does not establish issuer identity. The approved v1 adapter reads source chart metadata through the pinned yfinance public API. See the approved design and execution plan below.
+- Optional provider-neutral `instrument_lookup:1`, immutable exact lookup evidence, additive financial schema v5, and yfinance adapter 0.2.0 with the dependency still pinned to 1.7.0.
+- Agent-created bindings from an exact saved company observation and selected listing plus market-provider metadata. Pure `instrument-binding-v1` rules require concordant issuer identity, ticker, known exchange and equity type; accepted bindings are classified `source_supported`. Clear matches proceed without routine confirmation. Missing/conflicting evidence cannot create a binding, and no default listing or provider is chosen.
+- Workspace-scoped immutable binding records, transactional request deduplication, supersession/revocation history, bounded offline reads and additive application schema v2. Multiple bindings remain explicit.
+- Shared manual/agent lookup, create/read/list/history/revoke and bound-price operations. Bound fetches derive the exact provider instance/version and native instrument from successful scoped preparation, retain live-generation checks, and preserve binding provenance through success, failure and cancellation. Old datasets retain their original association after later transitions.
+- A twelve-tool actual `AgentRuntime` acceptance workflow against a real saved thesis: resolve Apple → discover AAPL from SEC listing evidence → source lookup → automatic binding → prices → frozen dataset → accepted chart.
 
-**Exit:** select the intended company and instrument, fetch its prices through the selected provider, and retain the evidence for that association. Ambiguity cannot silently choose a listing or provider.
+Verification: **278 workspace/all-target Rust tests**, strict workspace/all-target/all-feature Clippy, formatting, **31 SEC Python tests** and **23 yfinance Python tests** passed. Task reviews completed; the binding response-capacity finding was fixed and re-reviewed. Whole-branch review found no Critical or Important issues. One nonblocking CLI assertion-strengthening follow-up is recorded in the completed plan.
+
+A fresh standalone CLI run verified automatic Apple/AAPL binding, exact price/provenance, four refused adversarial cases, supersession from returned references, refusal of a new fetch using the old binding, and offline binding/history/dataset/view reads plus revocation after removing the generated manifest. No live SEC/Yahoo/model request was used. The pinned SDK's source-identity behavior was tested offline against real library transformations.
+
+Source detail: yfinance `get_info()` overwrites the source symbol with the requested symbol. Lookup uses bounded public history and selected source chart metadata instead; an echoed request or successful price fetch is not identity evidence. Version 1 supports explicit SEC NASDAQ/NYSE and Yahoo venue mappings, preserves ticker punctuation and legal-name words, and makes no universal or historical security-identity claim. See the lookup protocol and application README for limits, including bounded tool responses after durable mutations.
+
+**Exit met:** agents and manual clients can select supported company/listing evidence, create a binding, fetch prices through its pinned provider, and retain that association offline without silently resolving ambiguity.
 
 ### 3. Durable conversations and research workspaces
 
@@ -115,14 +123,14 @@ This milestone owns desktop transport, rendering, keyboard/focus behavior, view-
 
 Resolve `$IBM` → select its market instrument → fetch available data through configured capabilities → ask questions → request structured research views → save and reopen the conversation → refresh only the active workspace → inspect an earlier review with its original evidence.
 
-This full workflow is not yet implemented. The application runtime is complete; company-to-market binding, durable conversations, passage extraction, active-workspace refresh and desktop integration remain. The deterministic agent acceptance uses a real thesis because generic conversation identity is still milestone 3.
+This full workflow is not yet implemented. The application runtime and company-to-market binding are complete; durable conversations, passage extraction, active-workspace refresh and desktop integration remain. The deterministic agent acceptance uses a real thesis because generic conversation identity is still milestone 3.
 
 ## Reading list
 
 Paths are relative to the repository root; inspect the implementation branch when a file is absent from the current checkout.
 
 - `docs/superpowers/specs/2026-09-10-instrument-binding-design.md` — approved automatic source-supported binding design.
-- `docs/superpowers/plans/2026-09-10-instrument-binding.md` — current binding implementation plan.
+- `docs/superpowers/plans/2026-09-10-instrument-binding.md` — completed binding implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-application-runtime-design.md` — approved runtime boundaries.
 - `docs/superpowers/plans/2026-09-10-application-runtime.md` — completed implementation and verification plan.
 - `docs/superpowers/specs/2026-09-10-desktop-research-design.md` — approved product scope; this roadmap supersedes its older interleaved delivery sequence.
