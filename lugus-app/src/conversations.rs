@@ -8,3 +8,11 @@ pub use context::{build_context, build_context_with_omitted};
 pub use domain::*;
 pub use frozen::{DatasetSelectionCoverage, FrozenDataset, FrozenView};
 pub use limits::{ConversationLimits, default_conversation_run_limits};
+
+pub mod ownership;
+pub mod store;
+pub use ownership::{ExecutionEpoch, LocalExecutionLease, RunAttempt};
+pub use store::*;
+
+mod workspace;
+pub use workspace::workspace_transition;

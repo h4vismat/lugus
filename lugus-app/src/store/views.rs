@@ -63,6 +63,17 @@ impl SqliteApplicationStore {
             params![scope.workspace_id, scope.request_id, input, receipt.id],
         )
         .map_err(storage)?;
+        super::conversations::attach_view(
+            &tx,
+            &scope.workspace_id,
+            &header.repository_id,
+            &receipt.id,
+            &self.conversation_limits,
+            self.conversation_limits
+                .page_bytes
+                .min(self.limits.max_output_bytes)
+                .saturating_sub(128),
+        )?;
         tx.commit().map_err(storage)?;
         Ok(receipt)
     }

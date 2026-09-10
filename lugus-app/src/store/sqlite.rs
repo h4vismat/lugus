@@ -5,6 +5,8 @@ use std::path::Path;
 
 pub struct SqliteApplicationStore {
     pub(super) connection: Connection,
+    pub(super) conversation_limits: crate::conversations::ConversationLimits,
+    pub(super) store_key: std::path::PathBuf,
     pub(super) evidence: Box<dyn EvidenceRepository>,
     pub(super) limits: Limits,
     pub(super) clock: Box<dyn Clock>,
@@ -18,8 +20,38 @@ impl SqliteApplicationStore {
         clock: Box<dyn Clock>,
         ids: Box<dyn IdSource>,
     ) -> Result<Self> {
+        Self::open_configured(path, evidence, limits, None, clock, ids)
+    }
+    pub fn open_with_conversation_limits(
+        path: impl AsRef<Path>,
+        evidence: Box<dyn EvidenceRepository>,
+        limits: Limits,
+        conversation_limits: crate::conversations::ConversationLimits,
+        clock: Box<dyn Clock>,
+        ids: Box<dyn IdSource>,
+    ) -> Result<Self> {
+        Self::open_configured(
+            path,
+            evidence,
+            limits,
+            Some(conversation_limits),
+            clock,
+            ids,
+        )
+    }
+    fn open_configured(
+        path: impl AsRef<Path>,
+        evidence: Box<dyn EvidenceRepository>,
+        limits: Limits,
+        requested: Option<crate::conversations::ConversationLimits>,
+        clock: Box<dyn Clock>,
+        ids: Box<dyn IdSource>,
+    ) -> Result<Self> {
         limits.validate()?;
-        let mut connection = Connection::open(path).map_err(storage)?;
+        let conversation_limits = requested.clone().unwrap_or_default();
+        conversation_limits.validate()?;
+        let mut connection = Connection::open(path.as_ref()).map_err(storage)?;
+        let store_key = std::fs::canonicalize(path.as_ref()).map_err(storage)?;
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(storage)?;
@@ -50,7 +82,7 @@ impl SqliteApplicationStore {
                 ));
             }
             tx.execute_batch("CREATE TABLE app_records(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repository TEXT NOT NULL,category TEXT NOT NULL,payload TEXT NOT NULL); CREATE TABLE dataset_rows(dataset_id TEXT NOT NULL REFERENCES app_records(id),ordinal INTEGER NOT NULL,payload TEXT NOT NULL,observation_id INTEGER,PRIMARY KEY(dataset_id,ordinal)); CREATE TABLE view_requests(workspace TEXT NOT NULL,request TEXT NOT NULL,input TEXT NOT NULL,view_id TEXT NOT NULL REFERENCES app_records(id),PRIMARY KEY(workspace,request)); PRAGMA application_id=1280657235; PRAGMA user_version=1;").map_err(storage)?;
-        } else if !(1..=2).contains(&version) || application != 1280657235 {
+        } else if !(1..=3).contains(&version) || application != 1280657235 {
             return Err(error(
                 ErrorKind::Storage,
                 "unsupported application database schema",
@@ -59,8 +91,24 @@ impl SqliteApplicationStore {
         if version < 2 {
             super::binding_history::migrate(&tx)?;
         }
+        if version < 3 {
+            super::conversations::migrate(&tx, &conversation_limits)?;
+        }
+        let stored_limits = super::conversations::configured_limits(&tx)?;
+        if requested
+            .as_ref()
+            .is_some_and(|limits| *limits != stored_limits)
+        {
+            return Err(error(
+                ErrorKind::Conflict,
+                "conversation limits differ from the persisted store configuration",
+            ));
+        }
+        stored_limits.validate()?;
         tx.commit().map_err(storage)?;
         Ok(Self {
+            conversation_limits: stored_limits,
+            store_key,
             connection,
             evidence,
             limits,
@@ -135,6 +183,14 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     }
 }
 impl ApplicationStore for SqliteApplicationStore {
+    fn conversation_store(&self) -> Result<&dyn crate::conversations::ConversationStore> {
+        Ok(self)
+    }
+    fn conversation_store_mut(
+        &mut self,
+    ) -> Result<&mut dyn crate::conversations::ConversationStore> {
+        Ok(self)
+    }
     fn bind(&mut self, s: &Scope, r: &BindRequest) -> Result<BindingRecord> {
         self.create_binding(s, r)
     }

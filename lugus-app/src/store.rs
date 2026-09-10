@@ -2,6 +2,7 @@
 mod binding_history;
 mod binding_reads;
 mod bindings;
+mod conversations;
 mod evidence;
 mod freeze;
 mod sqlite;
@@ -12,6 +13,20 @@ use lugus_financial::resolution::catalog::CatalogSelection;
 pub use sqlite::SqliteApplicationStore;
 
 pub trait ApplicationStore: Send {
+    fn conversation_store(&self) -> Result<&dyn crate::conversations::ConversationStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "conversation storage is unavailable",
+        ))
+    }
+    fn conversation_store_mut(
+        &mut self,
+    ) -> Result<&mut dyn crate::conversations::ConversationStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "conversation storage is unavailable",
+        ))
+    }
     fn bind(&mut self, scope: &Scope, request: &BindRequest) -> Result<BindingRecord>;
     fn read_binding(&self, scope: &Scope, id: &str) -> Result<BindingView>;
     fn list_bindings(&self, scope: &Scope, page: PageRequest) -> Result<BindingPage>;
