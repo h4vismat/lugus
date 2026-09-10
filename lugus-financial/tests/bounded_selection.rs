@@ -163,3 +163,53 @@ fn repository_identity_is_counted_before_context_materialization() {
         Err(BoundedReadError::LimitExceeded)
     ));
 }
+
+#[test]
+fn resolution_history_is_bounded_without_replacing_identity_rules() {
+    use lugus_financial::resolution::{
+        ResolutionPage, SearchQuery, SearchRequest,
+        catalog::{CatalogRepository, ResolutionOutcome},
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("financial.db");
+    let mut repo = SqliteRepository::open(&path).unwrap();
+    let request = SearchRequest {
+        query: SearchQuery::Identifier {
+            identifier: lugus_financial::domain::CompanyId {
+                namespace: "sec:ticker".into(),
+                value: "IBM".into(),
+            },
+            exchange: None,
+        },
+        page_size: 10,
+        cursor: None,
+    };
+    let page:ResolutionPage=serde_json::from_value(json!({"items":[{"identifier":{"namespace":"sec:cik","value":"0000051143"},"name":"IBM","aliases":[],"listings":[{"ticker":{"namespace":"sec:ticker","value":"IBM"},"exchange":null}],"source_url":"https://fixture.test/directory","source_checksum":"a".repeat(64),"retrieved_at":"2024-02-01T00:00:00Z","match_reasons":["exact_identifier"]}],"next_cursor":null,"snapshot":"one","coverage":"fixture"})).unwrap();
+    let first = repo.start_resolution_run(&provider(), &request).unwrap();
+    repo.save_resolution_page(first, &request, &page).unwrap();
+    assert!(
+        matches!(repo.bounded_resolution_outcome(first,limits()).unwrap(),ResolutionOutcome::Resolved{entry,..} if entry.candidate.name=="IBM")
+    );
+    let second = repo.start_resolution_run(&provider(), &request).unwrap();
+    repo.save_resolution_page(second, &request, &page).unwrap();
+    assert!(matches!(
+        repo.bounded_resolution_outcome(
+            second,
+            ReadLimits {
+                max_items: 1,
+                ..limits()
+            }
+        ),
+        Err(BoundedReadError::LimitExceeded)
+    ));
+    let sql = rusqlite::Connection::open(path).unwrap();
+    sql.execute(
+        "UPDATE catalog_observations SET payload=?",
+        ["é".repeat(6000)],
+    )
+    .unwrap();
+    assert!(matches!(
+        repo.bounded_resolution_outcome(second, limits()),
+        Err(BoundedReadError::LimitExceeded)
+    ));
+}

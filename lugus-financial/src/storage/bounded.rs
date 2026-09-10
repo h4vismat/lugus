@@ -32,7 +32,7 @@ impl From<rusqlite::Error> for BoundedReadError {
 pub type ReadResult<T> = std::result::Result<T, BoundedReadError>;
 
 impl ReadLimits {
-    fn validate(self) -> ReadResult<()> {
+    pub(super) fn validate(self) -> ReadResult<()> {
         if self.max_items == 0
             || self.max_bytes == 0
             || self.max_items > i64::MAX as usize
