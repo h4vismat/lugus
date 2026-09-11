@@ -8,11 +8,23 @@ fn page<T: DeserializeOwned + Serialize>(
     limits: &ConversationLimits,
     max: usize,
 ) -> Result<ConversationPage<T>> {
+    let query =
+        format!("SELECT payload FROM {table} WHERE {column}=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3");
+    let total_query = format!("SELECT count(*) FROM {table} WHERE {column}=?1");
+    query_page(tx, &query, &total_query, key, p, limits, max)
+}
+fn query_page<T: DeserializeOwned + Serialize>(
+    tx: &Connection,
+    query: &str,
+    total_query: &str,
+    key: &str,
+    p: PageRequest,
+    limits: &ConversationLimits,
+    max: usize,
+) -> Result<ConversationPage<T>> {
     if p.limit == 0 || p.limit > limits.page_items || p.offset > i64::MAX as usize {
         return Err(limit());
     }
-    let query =
-        format!("SELECT payload FROM {table} WHERE {column}=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3");
     let sizes =
         format!("SELECT count(*),coalesce(sum(length(CAST(payload AS BLOB))),0) FROM ({query})");
     let (count, bytes): (i64, i64) = tx
@@ -22,11 +34,7 @@ fn page<T: DeserializeOwned + Serialize>(
         .map_err(storage)?;
     check_size(bytes, max.min(limits.page_bytes))?;
     let total: i64 = tx
-        .query_row(
-            &format!("SELECT count(*) FROM {table} WHERE {column}=?1"),
-            [key],
-            |r| r.get(0),
-        )
+        .query_row(total_query, [key], |r| r.get(0))
         .map_err(storage)?;
     let end = p.offset.checked_add(count as usize).ok_or_else(limit)?;
     let next = ((end as u64) < total as u64).then_some(end);
@@ -41,7 +49,7 @@ fn page<T: DeserializeOwned + Serialize>(
     if (bytes as usize).checked_add(overhead).ok_or_else(limit)? > max.min(limits.page_bytes) {
         return Err(limit());
     }
-    let mut stmt = tx.prepare(&query).map_err(storage)?;
+    let mut stmt = tx.prepare(query).map_err(storage)?;
     let items = stmt
         .query_map(params![key, p.limit as i64, p.offset as i64], |r| {
             r.get::<_, String>(0)
@@ -174,6 +182,26 @@ impl SqliteApplicationStore {
             &tx,
             "conversations",
             "repository",
+            &self.evidence.repository_identity()?,
+            p,
+            &self.conversation_limits,
+            self.limits.max_output_bytes,
+        )?;
+        tx.commit().map_err(storage)?;
+        Ok(result)
+    }
+    pub(super) fn conversation_recent_list(
+        &self,
+        p: PageRequest,
+    ) -> Result<ConversationPage<Conversation>> {
+        let tx = self.connection.unchecked_transaction().map_err(storage)?;
+        // Recency is maintained on writes; this covering index walk never loads messages.
+        let result = query_page(
+            &tx,
+            "SELECT c.payload FROM conversation_recency r
+             JOIN conversations c ON c.id=r.conversation_id
+             WHERE r.repository=?1 ORDER BY r.sequence DESC LIMIT ?2 OFFSET ?3",
+            "SELECT count(*) FROM conversation_recency WHERE repository=?1",
             &self.evidence.repository_identity()?,
             p,
             &self.conversation_limits,

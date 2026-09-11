@@ -2,6 +2,17 @@
 use super::*;
 use crate::conversations::*;
 impl Application {
+    pub async fn conversation_preparation(
+        &self,
+        conversation: &str,
+        run: &str,
+    ) -> Result<Option<String>> {
+        crate::conversations::validate_id(conversation)?;
+        crate::conversations::validate_id(run)?;
+        let (conversation, run) = (conversation.to_owned(), run.to_owned());
+        self.conversation_effect(move |s| s.preparation(&conversation, &run))
+            .await
+    }
     // Authority/control values must never acquire Serialize merely to cross this boundary.
     // Store ports preflight their serializable outputs; only trusted crate code uses this bridge.
     pub(crate) async fn conversation_effect<T: Send + 'static>(
@@ -33,6 +44,14 @@ impl Application {
     }
     pub async fn conversations(&self, page: PageRequest) -> Result<ConversationPage<Conversation>> {
         self.conversation_effect(move |s| s.conversations(page))
+            .await
+    }
+    /// Lists chats by their latest persisted message or creation, newest first.
+    pub async fn recent_conversations(
+        &self,
+        page: PageRequest,
+    ) -> Result<ConversationPage<Conversation>> {
+        self.conversation_effect(move |s| s.recent_conversations(page))
             .await
     }
     pub async fn conversation_workspace(&self, id: &str) -> Result<WorkspaceState> {

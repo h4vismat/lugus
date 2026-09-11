@@ -14,6 +14,13 @@ for line in sys.stdin:
         if mode == 'unsupported':
             result['capabilities'] = {'filings': 1}
     else:
+        if mode in ('source_timeout', 'source_unavailable'):
+            kind = mode.removeprefix('source_')
+            mode = 'ok'
+            print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'error': {'code': -32000, 'message': 'temporary source failure', 'data': {'kind': kind}}}), flush=True)
+            continue
+        if mode == 'eof':
+            sys.exit(0)
         if mode == 'timeout':
             time.sleep(10)
         if mode == 'malformed':

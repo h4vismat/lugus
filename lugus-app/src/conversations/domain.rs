@@ -84,6 +84,9 @@ impl RunStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunRecord {
+    /// Unverified user-supplied resolution hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_hint: Option<String>,
     pub id: String,
     pub conversation_id: String,
     pub workspace_id: String,
@@ -142,6 +145,9 @@ pub struct FrozenReference {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessageRequest {
+    /// Unverified user-supplied resolution hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_hint: Option<String>,
     pub conversation_id: String,
     pub request_id: String,
     pub text: String,
@@ -155,6 +161,11 @@ impl SendMessageRequest {
         validate_id(&self.request_id)?;
         if self.text.trim().is_empty() {
             return Err(invalid("message text must not be empty"));
+        }
+        if self.company_hint.as_ref().is_some_and(|hint| {
+            hint.trim().is_empty() || hint.len() > 256 || hint.chars().any(char::is_control)
+        }) {
+            return Err(invalid("company hint must be bounded control-free text"));
         }
         if self.selected.len() > limits.selected_refs {
             return Err(resource_limit());

@@ -1,6 +1,24 @@
 # lugus-agent
 
-`lugus-agent` provides disposable agent turns and durable, explicitly requested investment reviews. Its public `AgentRuntime` and `ToolExecutor` boundaries do not expose Codex protocol types, so another runtime adapter can implement the same contracts. The current adapter supports `codex-cli 0.153.4` exactly.
+`lugus-agent` provides disposable agent turns and durable, explicitly requested investment reviews. Its public `AgentRuntime` and `ToolExecutor` boundaries are provider-neutral. The adapters support `codex-cli 0.153.4` and Claude Code `2.1.268` exactly.
+
+## Run the Claude Code example
+
+Install Claude Code separately and sign in with its CLI. Lugus preserves that authentication environment without reading, copying, or storing credentials. `ClaudeRuntime::connect(ClaudeConfig { executable, workspace, model })` validates the workspace, optional model and CLI version. Every `run` launches a fresh print session; `close` prevents subsequent runs.
+
+```sh
+mkdir -p /tmp/lugus-claude-demo
+cargo run -p lugus-agent --example claude_session -- \
+  /tmp/lugus-claude-demo /path/to/claude
+```
+
+An optional third argument selects a model. The example supplies a fictional number through `synthetic_value`, prints streamed events and the final report, and uses no financial storage. Live verification on 2026-09-11 successfully dispatched the tool once, streamed the fictional result, and reported token usage with the installed CLI's existing authentication.
+
+Claude receives instructions as its explicit system prompt and receives the context and user prompt through stdin. The adapter uses `--restricted`, `--strict-mcp-config`, `--disable-slash-commands`, `disableAllHooks`, no session persistence, and an explicit built-in tool list. `allow_web_search` enables only `WebSearch` and `WebFetch`; otherwise no built-in research or file/command tools are selected. Host tools are individually permitted, and other permission requests are automatically denied. User/project/local settings and their plugins do not load. Organization-managed policy remains authoritative, including mandatory managed hooks; use an installation whose organization policy is appropriate for the data supplied. `--bare` is deliberately avoided because it disables OAuth/keychain authentication, while `--safe-mode` also removes explicitly configured HTTP MCP servers.
+
+The Rust MCP transport uses Hyper on a random `127.0.0.1` port with a fresh 256-bit bearer token, rejects every Origin header, caps HTTP bodies at 1 MiB, and owns all connection tasks. It supports the 2025 Streamable HTTP protocol versions through `2025-11-25`, JSON responses, initialization, tool discovery and invocation. Tool results return to their originating HTTP requests. Run limits apply before host callback dispatch; exhausted budgets return an MCP tool error without executing the callback. Native search does not consume the host callback budget. Inputs, output frames, accumulated text, connection count and HTTP request count are bounded. CLI stderr is discarded and raw authentication errors are not forwarded. Completion, errors, cancellation and timeout stop the transport and reap the CLI; dropping the run future kills the CLI and aborts the transport tasks.
+
+Protocol references: [CLI reference](https://code.claude.com/docs/en/cli-reference), [stream message types](https://code.claude.com/docs/en/agent-sdk/typescript), [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports). Deterministic tests use a Python subprocess fixture only; production has no Python or Node SDK dependency. Transport tests need permission to bind and connect to localhost.
 
 ## Run the Codex example
 

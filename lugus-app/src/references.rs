@@ -2,7 +2,7 @@
 use crate::*;
 use chrono::{DateTime, Utc};
 use lugus_financial::{
-    domain::{Decimal, Filing},
+    domain::{Decimal, Fact, Filing},
     market_data::{PriceBar, PriceCoverage},
     resolution::catalog::CatalogEntry,
     selection::{Evidence, FactGroup, MetricQuery, PriceSeries, RunReference},
@@ -50,6 +50,9 @@ pub enum DatasetProjection {
         run_id: i64,
         query: MetricQuery,
     },
+    AllFacts {
+        run_id: i64,
+    },
     Filings {
         run_id: i64,
     },
@@ -92,6 +95,9 @@ pub enum DatasetRow {
     },
     Fact {
         group: FactGroup,
+    },
+    ReportedFact {
+        evidence: Evidence<Fact>,
     },
     Filing {
         evidence: Evidence<Filing>,

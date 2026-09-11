@@ -111,38 +111,50 @@ impl From<lugus_financial::error::Error> for AppError {
     fn from(error: lugus_financial::error::Error) -> Self {
         use lugus_financial::error::ErrorKind as FinancialKind;
         let (kind, retryable, message) = match error.kind {
-            FinancialKind::InvalidRequest => {
-                (ErrorKind::InvalidInput, false, "invalid financial request")
-            }
+            FinancialKind::InvalidRequest => (
+                ErrorKind::InvalidInput,
+                false,
+                "Invalid financial request. Check the provider's identifier namespace, date range, and filters before trying again.",
+            ),
             FinancialKind::Unsupported => (
                 ErrorKind::Unsupported,
                 false,
-                "unsupported financial operation",
+                "This provider does not support the requested operation. Select an offered provider with that capability.",
             ),
             FinancialKind::Configuration => (
                 ErrorKind::Unavailable,
                 false,
-                "provider configuration is unavailable",
+                "Provider setup or access needs attention. Check its runtime, dependencies, and required source identity or credentials before retrying.",
             ),
-            FinancialKind::RateLimited => {
-                (ErrorKind::RateLimited, true, "provider rate limit reached")
-            }
-            FinancialKind::Unavailable => (ErrorKind::Unavailable, true, "provider is unavailable"),
+            FinancialKind::RateLimited => (
+                ErrorKind::RateLimited,
+                true,
+                "The data source is rate limiting requests. Wait for the indicated retry delay before starting a new fetch; saved evidence remains available.",
+            ),
+            FinancialKind::Unavailable => (
+                ErrorKind::Unavailable,
+                true,
+                "The data source is temporarily unavailable. Try a new fetch later or use existing saved evidence with its retrieval date.",
+            ),
             FinancialKind::NotFound => (
                 ErrorKind::MissingData,
                 false,
-                "financial data was not found",
+                "The source returned no matching data. Check the exact listing or company identifier and requested dates; this does not prove the company or instrument does not exist.",
             ),
             FinancialKind::MalformedData | FinancialKind::Protocol => (
                 ErrorKind::Unavailable,
                 false,
-                "provider returned an invalid response",
+                "The provider returned an invalid response. Repeating the same request may not help; check the plugin or use saved evidence, preserving its source and retrieval date.",
             ),
-            FinancialKind::Timeout => (ErrorKind::Timeout, true, "provider operation timed out"),
+            FinancialKind::Timeout => (
+                ErrorKind::Timeout,
+                true,
+                "The data source timed out. Try a new fetch later; if it repeatedly times out, request a narrower date range and disclose the reduced coverage.",
+            ),
             FinancialKind::Persistence => (
                 ErrorKind::Storage,
                 false,
-                "financial storage operation failed",
+                "Financial evidence could not be saved. Check local storage before fetching again; do not treat this request as saved evidence.",
             ),
         };
         let mut result = Self::new(kind, message, retryable);

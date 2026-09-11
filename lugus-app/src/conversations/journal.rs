@@ -349,7 +349,7 @@ mod tests {
         .await
         .unwrap();
         let runtime = ImmediateRuntime(Arc::new(Mutex::new(None)));
-        let host = ConversationHost::start(
+        let host = ConversationHost::start_with_tools(
             app,
             Arc::new(runtime.clone()),
             ConversationOptions::default(),
@@ -366,6 +366,7 @@ mod tests {
         gates().lock().unwrap().insert(c.id.clone(), gate.clone());
         let run = host
             .send(SendMessageRequest {
+                company_hint: None,
                 conversation_id: c.id.clone(),
                 request_id: "one".into(),
                 text: "List bindings".into(),

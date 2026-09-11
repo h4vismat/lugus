@@ -10,6 +10,17 @@ use std::{
 
 #[async_trait::async_trait]
 pub trait RuntimeFactory: Send + Sync {
+    /// Freeze mutable runtime selection for one admitted message, including preparation.
+    /// Immutable factories can retain the default and are reused directly.
+    fn snapshot(&self) -> Option<std::sync::Arc<dyn RuntimeFactory>> {
+        None
+    }
+
+    /// Optional deadline for a selected profile, applied to the whole message.
+    fn run_timeout(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// A new session for one accepted turn. The host enforces deadline and close.
     /// Creation must be cancellation-safe: until returned, the factory owns its child cleanup.
     async fn create(&self) -> Result<Box<dyn AgentRuntime>>;

@@ -327,6 +327,7 @@ fn selected_evidence_is_scoped_frozen_and_retry_does_not_reread_mutable_state() 
     let lease = LocalExecutionLease::acquire(&path).unwrap();
     let epoch = s.activate(&lease).unwrap();
     let request = SendMessageRequest {
+        company_hint: None,
         conversation_id: c.id.clone(),
         request_id: "send".into(),
         text: "Compare prices".into(),
@@ -341,6 +342,7 @@ fn selected_evidence_is_scoped_frozen_and_retry_does_not_reread_mutable_state() 
         s.admit(
             &epoch,
             &SendMessageRequest {
+                company_hint: None,
                 conversation_id: other.id,
                 ..request.clone()
             }
@@ -406,6 +408,7 @@ fn selected_payload_limits_preflight_before_decoding_and_admission() {
     let lease = LocalExecutionLease::acquire(&path).unwrap();
     let epoch = s.activate(&lease).unwrap();
     let req = SendMessageRequest {
+        company_hint: None,
         conversation_id: c.id.clone(),
         request_id: "send".into(),
         text: "Compare".into(),

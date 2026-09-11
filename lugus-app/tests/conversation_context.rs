@@ -228,6 +228,7 @@ fn selected_reference_request_rejects_untrusted_payload_and_bad_ids() {
     );
     let limits = ConversationLimits::default();
     let request = SendMessageRequest {
+        company_hint: None,
         conversation_id: "c".into(),
         request_id: "req".into(),
         text: "question".into(),
@@ -236,6 +237,7 @@ fn selected_reference_request_rejects_untrusted_payload_and_bad_ids() {
     assert!(request.validate(&limits).is_ok());
     for id in ["", "bad\nid"] {
         let invalid = SendMessageRequest {
+            company_hint: None,
             conversation_id: id.into(),
             ..request.clone()
         };
@@ -516,4 +518,38 @@ fn frozen_shape_check_preserves_opaque_data_and_json_formatting() {
     let snapshot =
         build_context(&new_message(), &[], std::slice::from_ref(&frozen), &limits).unwrap();
     assert_eq!(snapshot.references[0].serialized, frozen.serialized);
+}
+
+#[test]
+fn optional_company_hint_preserves_legacy_wire_shape_and_rejects_invalid_text() {
+    let legacy = r#"{"conversation_id":"c","request_id":"r","text":"research","selected":[]}"#;
+    let request: SendMessageRequest = serde_json::from_str(legacy).unwrap();
+    assert_eq!(request.company_hint, None);
+    assert_eq!(serde_json::to_string(&request).unwrap(), legacy);
+    let limits = ConversationLimits::default();
+    for hint in [
+        "".to_owned(),
+        "  ".to_owned(),
+        "AAPL\n".to_owned(),
+        "é".repeat(129),
+    ] {
+        let invalid = SendMessageRequest {
+            company_hint: Some(hint),
+            ..request.clone()
+        };
+        assert_eq!(
+            invalid.validate(&limits).unwrap_err().kind,
+            ErrorKind::InvalidInput
+        );
+    }
+    let hinted = SendMessageRequest {
+        company_hint: Some("é".repeat(128)),
+        ..request
+    };
+    hinted.validate(&limits).unwrap();
+    let encoded = serde_json::to_string(&hinted).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SendMessageRequest>(&encoded).unwrap(),
+        hinted
+    );
 }

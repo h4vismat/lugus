@@ -125,3 +125,54 @@ pub(crate) fn configured_limits(tx: &Connection) -> Result<ConversationLimits> {
         .map_err(storage)?;
     serde_json::from_str(&value).map_err(storage)
 }
+
+/// One-time backfill reads only the last message per chat. Subsequent ordering uses a
+/// transactional sequence, independent of clock precision or clock adjustments.
+pub(crate) fn migrate_recency(tx: &Connection) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE conversation_recency (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id),
+            repository TEXT NOT NULL
+        );
+        CREATE INDEX conversation_recency_order ON conversation_recency(repository,sequence);
+        INSERT INTO conversation_recency(conversation_id,repository)
+            SELECT c.id,c.repository FROM conversations c
+            LEFT JOIN conversation_messages m ON m.rowid=(
+                SELECT rowid FROM conversation_messages
+                WHERE conversation_id=c.id ORDER BY rowid DESC LIMIT 1
+            )
+            ORDER BY julianday(coalesce(json_extract(m.payload,'$.created_at'),
+                                        json_extract(c.payload,'$.created_at'))),
+                     coalesce(m.rowid,0),c.rowid;
+        CREATE TRIGGER conversation_recency_create AFTER INSERT ON conversations
+        BEGIN
+            INSERT INTO conversation_recency(conversation_id,repository)
+            VALUES(NEW.id,NEW.repository);
+        END;
+        CREATE TRIGGER conversation_recency_message AFTER INSERT ON conversation_messages
+        BEGIN
+            DELETE FROM conversation_recency WHERE conversation_id=NEW.conversation_id;
+            INSERT INTO conversation_recency(conversation_id,repository)
+                SELECT id,repository FROM conversations WHERE id=NEW.conversation_id;
+        END;
+        PRAGMA user_version=5;",
+    )
+    .map_err(storage)
+}
+
+/// Add immutable preparation receipts without rewriting any existing run input.
+pub(crate) fn migrate_preparations(tx: &Connection) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE conversation_preparations (
+            run_id TEXT PRIMARY KEY REFERENCES conversation_runs(id),
+            payload TEXT NOT NULL
+        );
+        CREATE TRIGGER conversation_preparations_update BEFORE UPDATE ON conversation_preparations
+        BEGIN SELECT RAISE(ABORT,'immutable research preparation'); END;
+        CREATE TRIGGER conversation_preparations_delete BEFORE DELETE ON conversation_preparations
+        BEGIN SELECT RAISE(ABORT,'immutable research preparation'); END;
+        PRAGMA user_version=6;",
+    )
+    .map_err(storage)
+}

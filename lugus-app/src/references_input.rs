@@ -18,6 +18,9 @@ enum StrictProjection {
         run_id: i64,
         query: StrictMetric,
     },
+    AllFacts {
+        run_id: i64,
+    },
     Filings {
         run_id: i64,
     },
@@ -106,6 +109,7 @@ impl<'de> Deserialize<'de> for DatasetProjection {
                     },
                 },
             },
+            StrictProjection::AllFacts { run_id } => Self::AllFacts { run_id },
             StrictProjection::Filings { run_id } => Self::Filings { run_id },
             StrictProjection::Resolution { run_id } => Self::Resolution { run_id },
             StrictProjection::Document => Self::Document,

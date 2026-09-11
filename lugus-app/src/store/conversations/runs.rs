@@ -266,14 +266,21 @@ impl SqliteApplicationStore {
         };
         message.validate(&self.conversation_limits)?;
         let message_payload = json(&message, max)?;
+        // Reserve room for the application evidence package before selecting history.
+        // Required new input/references still fail explicitly if they cannot fit.
+        let mut context_limits = self.conversation_limits.clone();
+        context_limits.context_bytes -= context_limits
+            .selected_bytes
+            .min(context_limits.context_bytes / 3);
         let input = build_context_with_omitted(
             &message,
             &exchanges,
             &references,
             omitted,
-            &self.conversation_limits,
+            &context_limits,
         )?;
         let run = RunRecord {
+            company_hint: request.company_hint.clone(),
             id: run_id,
             conversation_id: conversation.id,
             workspace_id: conversation.workspace_id,

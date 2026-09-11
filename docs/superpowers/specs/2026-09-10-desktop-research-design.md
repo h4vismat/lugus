@@ -1,6 +1,6 @@
 # Lugus desktop research workspace
 
-Status: product scope agreed in conversation on 2026-09-10. This document records that scope and proposes boundaries for subsequent technical designs. Plugin-driven agent/view integration remains an unvalidated prerequisite; this is not yet an implementation specification for the desktop runtime.
+Status: product scope agreed in conversation on 2026-09-10; background refresh subsequently deferred on the same date. Backend milestones 1–4 are complete as recorded in the roadmap. This document records product scope and proposes boundaries; it is not yet an implementation specification for the desktop runtime.
 
 ## Product and first release
 
@@ -9,6 +9,8 @@ Lugus is a desktop research application combining conversations with persistent,
 The first release completes a focused company-research workflow: find a company, inspect prices and reported fundamentals, read filings, write a thesis, request a review, and revisit the assessment with its original evidence.
 
 Tauri with a TypeScript frontend is the user's preferred direction. Desktop framework validation and frontend library selection belong to the technical design; no framework or component library has been installed or selected by this document.
+
+Platform decision: validate feasibility on macOS first; other operating systems follow after that validation. The [isolated desktop-host probe](../spikes/2026-09-10-desktop-host/README.md) uses Tauri and plain TypeScript for that purpose. It does not select a production component library.
 
 ## Agreed screens
 
@@ -34,22 +36,22 @@ Provide essential application preferences and agent runtime configuration. Plugi
 | --- | --- | --- |
 | Company overview | Company identity, latest available closing price, basic historical chart, selected fundamentals, links to filings | Identify the instrument and provider; label the trading date, currency, and retrieval time. Daily history must not be labelled a live quote. |
 | Fundamentals | Selected reported metrics across periods and links to source evidence | Preserve units, reporting periods, filing dates, source concepts, and revisions. Missing values remain missing. Do not imply complete financial statements. |
-| Filings | Filing list, document reader, and Ask about this for selected passages | Keep document identity and source references with a selection. Preserve the reading position during refresh. |
-| Thesis and reviews | Thesis editor, explicit Run review action, assessment history, and original evidence | Separate editable thesis revisions, saved assessments, and refreshing data. Show persisted run outcomes and recovery states. |
+| Filings | Filing list, document reader, and Ask about this for selected passages | Keep document identity and source references with a selection. Preserve the reading position during research actions. |
+| Thesis and reviews | Thesis editor, explicit Run review action, assessment history, and original evidence | Separate editable thesis revisions, saved assessments, and newly fetched data. Show persisted run outcomes and recovery states. |
 
 Advanced charting, cross-company comparison views, customizable dashboards, live/intraday prices, and plugin management are outside this first release. Conversations may still discuss multiple companies and open their individual views.
 
-## Data access and refresh
+## Data access and stable workspaces
 
-Agents may fetch fresh data through activated capabilities while answering, without routine confirmation. Show fetching activity and provide a stop action. Users may also request refresh directly.
+Agents may fetch fresh data through activated capabilities while answering, without routine confirmation. Show fetching activity and provide a stop action. Users may fetch data through direct research actions and start a new workspace for fresh research.
 
-Open research views refresh automatically only for the active workspace. Switching workspaces stops scheduling refreshes for the previous workspace and checks the newly activated workspace for stale data. Inactive saved workspaces have no automatic refresh schedule.
+Background refresh is deferred. Creating, opening, switching or restoring a workspace does not schedule retrieval or launch a model turn. A new workspace contains fresh data only after a successful explicit research fetch; creation alone provides no freshness guarantee.
 
-Refresh preserves chart range, table sorting/selection, document position, and selected tabs. Each view exposes its last successful retrieval and the effective date of the data. Failed refreshes retain available data and show that updating failed. Empty, unavailable, partial, and stale data must be distinguishable.
+Research actions preserve existing chart range, table sorting/selection, document position, and selected tabs. Each view exposes its retrieval time and the effective date of the data. Failed fetches retain available evidence and show the failure. Empty, unavailable, partial, and previously retrieved data must be distinguishable.
 
-Background refresh does not launch model turns, edit a thesis, or rerun assessments. Reviews are explicitly requested and retain frozen evidence. Agent runs and data refresh jobs have separate lifecycles; changing the active workspace is not implicitly an instruction to cancel an explicitly requested review.
+Reviews are explicitly requested and retain frozen evidence. Agent runs and data fetch jobs have separate lifecycles; changing the active workspace is not implicitly an instruction to cancel an explicitly requested review. Late results remain associated with their originating workspace.
 
-Proposed scheduler rules for technical design: choose freshness policies per capability/data type, deduplicate overlapping requests, respect provider rate limits, and bound retries. Results from an already-running fetch may be stored after a workspace switch, but must never update the newly active workspace by mistake. Exact intervals and cancellation behavior must be specified before implementing the scheduler.
+A dedicated Fetch latest data action within an existing workspace may be considered later. Scheduling policies, automatic retries and periodic freshness checks are outside the initial desktop milestone.
 
 ## Extensibility and proposed architecture
 
@@ -57,13 +59,15 @@ The shell owns conversations, navigation, view placement, persistence, and activ
 
 Distinguish three states: an activated provider capability, data already stored locally, and tools/evidence exposed to an agent turn. They are not interchangeable. Stored data should remain inspectable when a provider is unavailable; fresh retrieval requires an available capability.
 
-The proposed application layer coordinates existing financial repositories and ingestion functions, the agent runtime, durable reviews, workspace storage, and refresh scheduling. User actions and agent requests should reach the same validated application operations.
+The application layer coordinates financial repositories and ingestion functions, the agent runtime, durable reviews and workspace storage. User actions and agent requests should reach the same validated application operations. The desktop host must reuse the completed backend contracts.
 
 Keep desktop transport at the boundary. Financial domain code, workspace transitions, and review coordination should not depend on desktop-framework or model-vendor protocol types. Favor pure functions for state transitions, capability selection, freshness decisions, and view-data projection; isolate storage, network access, clocks, and process lifecycle behind explicit interfaces.
 
 Use structured, validated view requests rather than interpreting arbitrary assistant prose as UI commands. Whether plugins provide renderable schemas, map to application-owned renderers, or eventually provide their own UI is an open question for the capability spike. The first financial views do not establish support for arbitrary future plugin output.
 
-## Existing foundations and missing capabilities
+## Original prerequisite analysis (historical)
+
+The following analysis predates backend milestones 1–4. Consult the roadmap and current crate READMEs for completed capabilities; this section is not a list of desktop work still to implement.
 
 The repository currently contains `lugus-agent` and `lugus-financial`, with no desktop application crate or frontend package.
 
@@ -99,12 +103,14 @@ The release's acceptance scenario is a company search that selects the intended 
 
 ## Delivery sequence
 
+The user subsequently prioritized backend milestones before functional UI implementation. The [backend roadmap](../backend-milestones.md) supersedes the interleaved sequencing below; the screen scope remains unchanged. The [initial capability spike](../spikes/2026-09-10-capability-routing/README.md) records verified routing and its remaining limits.
+
 1. Complete the capability spike and company-identity design; use the findings to define technical contracts.
 2. Design the desktop host, conversation persistence, and state/event boundaries. Validate the preferred Tauri/TypeScript direction and choose UI libraries at this stage.
 3. Implement the shell and a complete search-to-overview workflow, including direct view opening and agent-initiated view opening.
 4. Add fundamentals and the filing reader with explicit selected context for questions.
 5. Add the minimal thesis/review workflow using supported frozen evidence.
-6. Complete active-workspace refresh, restore/recovery behavior, and integrated desktop verification before calling the initial release complete.
+6. Complete restore/recovery behavior and integrated desktop verification before calling the initial release complete. Background refresh is deferred.
 
 Each subsystem needs an implementation specification after its prerequisite decisions are resolved. This product scope is not a single executable plan for all six stages.
 
@@ -113,11 +119,11 @@ Each subsystem needs an implementation specification after its prerequisite deci
 - Start with either a message or a manually opened company view, and continue within the same workspace.
 - Open multiple companies' views in one conversation; switching between them does not silently change the context of earlier messages or saved evidence.
 - Restore conversations and view state after reopening the app, without reissuing completed model turns.
-- Test refresh scheduling with a fake clock and provider fixtures: only the active workspace schedules refresh, overlapping requests are bounded, late results remain associated with their origin, and updates preserve user selections.
-- Exercise partial data, missing capabilities, failed refreshes, and offline reading without inventing values or silently mixing providers/revisions.
+- Verify workspace creation, switching and restoration cause no automatic fetch or model turn; late results from explicit research remain associated with their origin and preserve user selections.
+- Exercise partial data, missing capabilities, failed fetches, and offline reading without inventing values or silently mixing providers/revisions.
 - Preserve exact financial decimal values in storage and transport. Any numeric conversion for plotting is a display projection; labels and calculations must use appropriate precision and retain source semantics.
 - Verify chat context refers to the selected filing document and passage. Render external filing content without access to privileged desktop APIs.
-- Run a review, refresh the displayed data, and reopen the assessment to verify its original evidence remains unchanged. Existing review cancellation and recovery guarantees must hold through the desktop host.
+- Run a review, fetch newer data in another workspace, and reopen the assessment to verify its original evidence remains unchanged. Existing review cancellation and recovery guarantees must hold through the desktop host.
 - Check keyboard navigation, focus behavior, pane resizing, readable chart/table alternatives, and loading/error states in the running desktop application.
 
 ## Repository references

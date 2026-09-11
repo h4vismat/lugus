@@ -97,6 +97,48 @@ impl SqliteApplicationStore {
                     .map(|group| DatasetRow::Fact { group })
                     .collect()
             }
+            DatasetProjection::AllFacts { run_id } => {
+                authorize(RunKind::Financial, run_id)?;
+                let evidence =
+                    self.evidence
+                        .financial_run(&receipt.provider, run_id, self.read_limits())?;
+                terminal(evidence.run.status)?;
+                if evidence.run.operation != "facts" && evidence.run.operation != "both" {
+                    return Err(error(ErrorKind::InvalidInput, "run does not contain facts"));
+                }
+                header.kind = DatasetKind::Facts;
+                header.policy = Some("all-reported-facts-v1".into());
+                header.query = serde_json::to_value(&evidence.run.query).map_err(storage)?;
+                header.limitations.push(
+                    "All saved observations from this company/date-range run; source coverage is unverified. No values are inferred or consolidated.".into(),
+                );
+                if evidence.run.status == RunStatus::Failed {
+                    header
+                        .limitations
+                        .push("The ingestion failed; saved observations may be partial.".into());
+                }
+                if evidence.run.facts_cursor.is_some() {
+                    header.limitations.push(
+                        "The source has remaining fact pages; saved observations are partial."
+                            .into(),
+                    );
+                }
+                header.selected_run = Some(lugus_financial::selection::RunReference {
+                    context: evidence.context,
+                    kind: "financial".into(),
+                    run_id,
+                    status: evidence.run.status,
+                    error: evidence
+                        .run
+                        .error
+                        .map(|_| "ingestion did not complete successfully".into()),
+                });
+                evidence
+                    .facts
+                    .into_iter()
+                    .map(|evidence| DatasetRow::ReportedFact { evidence })
+                    .collect()
+            }
             DatasetProjection::Filings { run_id } => {
                 authorize(RunKind::Financial, run_id)?;
                 let evidence =

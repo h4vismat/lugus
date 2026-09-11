@@ -16,6 +16,15 @@ pub struct Harness {
 }
 impl Harness {
     pub async fn new(modes: &[(&str, &str)], bounds: HostBounds, limits: Limits) -> Self {
+        Self::with_plugin(modes, bounds, limits, "worker-fixture", "1").await
+    }
+    pub async fn with_plugin(
+        modes: &[(&str, &str)],
+        bounds: HostBounds,
+        limits: Limits,
+        plugin: &str,
+        version: &str,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let financial = root.path().join("financial.sqlite");
         let application = root.path().join("application.sqlite");
@@ -35,8 +44,8 @@ impl Harness {
                 active: true,
                 factory: Arc::new(ProcessProviderFactory {
                     manifest: Manifest {
-                        id: "worker-fixture".into(),
-                        version: "1".into(),
+                        id: plugin.into(),
+                        version: version.into(),
                         protocol_version: 1,
                         command: "python3".into(),
                         args: vec![format!(
@@ -46,7 +55,7 @@ impl Harness {
                     },
                     directory: root.path().into(),
                     instance_id: (*id).into(),
-                    config: json!({"mode":mode,"barrier":root.path().join(id)}),
+                    config: json!({"mode":mode,"barrier":root.path().join(id),"plugin_id":plugin,"version":version}),
                 }),
             })
             .collect();

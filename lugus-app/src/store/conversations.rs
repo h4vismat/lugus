@@ -7,12 +7,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use std::path::Path;
 mod journal;
+mod preparation;
 mod reads;
 mod runs;
 mod schema;
 mod selection;
 mod workspace;
-pub(super) use schema::{configured_limits, migrate};
+pub(super) use schema::{configured_limits, migrate, migrate_preparations, migrate_recency};
 pub(super) use workspace::attach_view;
 fn conflict() -> AppError {
     error(
@@ -146,6 +147,9 @@ impl ConversationStore for SqliteApplicationStore {
     fn conversations(&self, p: PageRequest) -> Result<ConversationPage<Conversation>> {
         self.conversation_list(p)
     }
+    fn recent_conversations(&self, p: PageRequest) -> Result<ConversationPage<Conversation>> {
+        self.conversation_recent_list(p)
+    }
     fn workspace(&self, id: &str) -> Result<WorkspaceState> {
         self.workspace_read(id)
     }
@@ -166,6 +170,15 @@ impl ConversationStore for SqliteApplicationStore {
         let result = run_read(&tx, id, run, record_cap(self))?;
         tx.commit().map_err(storage)?;
         Ok(result)
+    }
+    fn save_preparation(&mut self, attempt: &RunAttempt, serialized: &str) -> Result<()> {
+        self.preparation_save(attempt, serialized)
+    }
+    fn preparation(&self, conversation_id: &str, run_id: &str) -> Result<Option<String>> {
+        self.preparation_read(conversation_id, Some(run_id))
+    }
+    fn latest_preparation(&self, conversation_id: &str) -> Result<Option<String>> {
+        self.preparation_read(conversation_id, None)
     }
     fn runs(&self, id: &str, p: PageRequest) -> Result<ConversationPage<RunRecord>> {
         self.conversation_page(id, None, "conversation_runs", "conversation_id", p)

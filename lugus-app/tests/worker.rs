@@ -123,6 +123,41 @@ impl Harness {
     }
 }
 #[tokio::test]
+async fn source_failures_preserve_worker_and_failed_run_before_successful_retry() {
+    for (mode, kind) in [
+        ("source_timeout_once", ErrorKind::Timeout),
+        ("source_unavailable_once", ErrorKind::Unavailable),
+    ] {
+        let h = Harness::start(mode, Limits::default()).await;
+        let first = h.submit(command("fixture")).unwrap().wait().await.unwrap();
+        assert_eq!(first.error.as_ref().unwrap().kind, kind);
+        assert!(h.catalog.lock().unwrap().get("fixture").unwrap().available);
+        let second = h.submit(command("fixture")).unwrap().wait().await.unwrap();
+        assert!(second.error.is_none());
+        let FetchCommand::Facts { query, .. } = command("fixture") else {
+            unreachable!()
+        };
+        let repo = SqliteRepository::open(&h.db).unwrap();
+        let snapshot = repo.snapshot(&second.provenance.provider, &query).unwrap();
+        assert_eq!(snapshot.runs.len(), 2);
+        assert!(
+            snapshot
+                .runs
+                .iter()
+                .any(|r| r.id == first.provenance.runs[0].id && r.status == RunStatus::Failed)
+        );
+        assert!(
+            snapshot
+                .runs
+                .iter()
+                .any(|r| r.id == second.provenance.runs[0].id && r.status == RunStatus::Complete)
+        );
+        h.worker.shutdown().await.unwrap();
+        reaped(&h.barrier);
+    }
+}
+
+#[tokio::test]
 async fn cancellation_finalizes_started_run_preserves_page_and_reaps() {
     let h = Harness::start("second_blocked", Limits::default()).await;
     let job = h.submit(command("fixture")).unwrap();

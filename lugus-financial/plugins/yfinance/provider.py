@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from common import ProviderError, YFINANCE_VERSION
 from instruments import fetch_metadata, lookup_params, project_metadata
+from recovery import Recovery
 
 MAX_LINE = 32 * 1024 * 1024
 MAX_ROWS = 100_000
@@ -168,9 +169,10 @@ def fetch_history(symbol, options):
 
 
 class Provider:
-    def __init__(self, fetch=fetch_history, clock=utc_now, fetch_metadata=fetch_metadata):
+    def __init__(self, fetch=fetch_history, clock=utc_now, fetch_metadata=fetch_metadata, recovery=None):
         self.fetch, self.clock = fetch, clock
         self.fetch_metadata = fetch_metadata
+        self.recovery = recovery if recovery is not None else Recovery()
         self.initialized = False
         self.snapshot = None
         self.next_cursor = None
@@ -191,7 +193,7 @@ class Provider:
             raise ProviderError('configuration', 'Initialize the provider first')
         query = lookup_params(params)
         with redirect_stdout(sys.stderr):
-            source = self.fetch_metadata(query['instrument']['value'])
+            source = self.recovery.run(lambda: self.fetch_metadata(query['instrument']['value']))
         return project_metadata(source, query, self.clock())
 
     def daily(self, params):
@@ -204,7 +206,7 @@ class Provider:
             options = dict(interval='1d',start=query['start'],end=(date.fromisoformat(query['end'])+timedelta(days=1)).isoformat(),
                            auto_adjust=False,back_adjust=False,repair=False,rounding=False,actions=False,keepna=True,timeout=10)
             with redirect_stdout(sys.stderr):
-                rows, metadata = self.fetch(query['instrument']['value'], options)
+                rows, metadata = self.recovery.run(lambda: self.fetch(query['instrument']['value'], options))
             items = normalize_rows(rows, metadata, query, self.clock())
             self.snapshot = (query, items)
         elif self.snapshot is None or cursor != self.next_cursor or query != self.snapshot[0]:
@@ -218,7 +220,10 @@ class Provider:
 
 
 def error_response(request_id, error):
-    return dict(jsonrpc='2.0',id=request_id,error=dict(code=error.code,message=str(error),data={'kind':error.kind}))
+    data = {'kind': error.kind}
+    if error.retry_after_seconds is not None:
+        data['retry_after_seconds'] = error.retry_after_seconds
+    return dict(jsonrpc='2.0',id=request_id,error=dict(code=error.code,message=str(error),data=data))
 
 
 def handle(provider, request):

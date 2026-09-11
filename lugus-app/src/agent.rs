@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 mod bindings;
 mod passages;
+mod price_chart;
 
 pub struct ResearchExecutor {
     application: Application,
@@ -27,6 +28,7 @@ impl ResearchExecutor {
         }
         let offering = application.offering()?;
         let mut specs = fetch_tool_specs(&offering);
+        specs.extend(price_chart::tool_spec(&offering));
         specs.extend(cached_tool_specs(application.limits()));
         specs.extend(bindings::tool_specs(application.limits(), &offering));
         specs.extend(passages::tool_specs(&application));
@@ -54,6 +56,26 @@ impl ResearchExecutor {
     pub fn tool_specs(&self) -> &[ToolSpec] {
         &self.specs
     }
+    /// Explicit allowlist: the analysis model cannot invoke hidden fetch or binding effects.
+    pub(crate) fn restrict_to_evidence(&mut self) {
+        const OFFLINE: &[&str] = &[
+            "lugus_read_fetch",
+            "lugus_dataset_header",
+            "lugus_read_dataset",
+            "lugus_read_document",
+            "lugus_read_view",
+            "lugus_open_view",
+            "lugus_read_binding",
+            "lugus_list_bindings",
+            "lugus_binding_history",
+            "lugus_text_header",
+            "lugus_read_text",
+            "lugus_read_passage",
+            "lugus_resolve_passage",
+        ];
+        self.specs
+            .retain(|spec| OFFLINE.contains(&spec.name.as_str()));
+    }
     async fn dispatch(&self, call: &ToolCall) -> Result<(bool, Value)> {
         let scope = scope_for_call(&self.scope, call)?;
         let limit = self.application.limits().max_input_bytes;
@@ -64,6 +86,9 @@ impl ResearchExecutor {
                 "tool was not offered for this turn",
                 false,
             ));
+        }
+        if call.name == price_chart::NAME {
+            return self.price_chart_call(&scope, call).await;
         }
         if passages::NAMES.contains(&call.name.as_str()) {
             return self.passage_call(&scope, call).await;
@@ -296,6 +321,7 @@ fn projection_schema() -> Value {
     json!({"oneOf":[
         object(vec![("kind",kind("prices")),("run_id",run()),("query",crate::agent_contract::price_query_schema()),("series",json!({"type":"string","enum":["close","adjusted_close"]}))]),
         object(vec![("kind",kind("facts")),("run_id",run()),("query",metric)]),
+        object(vec![("kind",kind("all_facts")),("run_id",run())]),
         object(vec![("kind",kind("filings")),("run_id",run())]),
         object(vec![("kind",kind("resolution")),("run_id",run())]),
         object(vec![("kind",kind("document"))])

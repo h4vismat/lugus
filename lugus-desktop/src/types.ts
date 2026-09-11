@@ -1,0 +1,18 @@
+import type {Identifier} from './state';
+export type Conversation={id:string;workspace_id:string;title:string;created_at:string};
+export type Message={id:string;conversation_id:string;run_id:string;role:'user'|'assistant';text:string;created_at:string};
+export type Run={id:string;conversation_id:string;status:'admitted'|'running'|'completed'|'failed'|'interrupted';error:{kind:string;message:string}|null};
+export type Page<T>={items:T[];next_offset:number|null};
+export type Activity={sequence:number;data:string;kind:string};
+export type Workspace={revision:number;view_ids:string[];selected_view_id:string|null};
+export type View={id:string;dataset_id:string;kind:'price_chart'|'data_table'|'document';descriptor_revision:number};
+export type Price={kind:'price';value:string|null;evidence:{value:{date:string;currency:string;close:string;retrieved_at:string;source_url:string;instrument:Identifier}}};
+export type Fact={kind:'fact';group:{period:{kind:string;date?:string;start?:string;end?:string};filed:string;value:string|null;conflict:string|null;candidates:{value:{company:Identifier;concept:string;label:string|null;unit:string;source_url:string;retrieved_at:string}}[]}};
+export type FinancialPeriod={kind:string;date?:string;start?:string;end?:string};
+export type ReportedFinancialFact={company:Identifier;namespace:string;concept:string;label:string|null;unit:string;value:string|null;period:FinancialPeriod;filed:string;form:string;filing_id:string;fiscal_year:number|null;fiscal_period:string|null;source_url:string;retrieved_at:string};
+export type ReportedFact={kind:'reported_fact';evidence:{value:ReportedFinancialFact}};
+export type Filing={kind:'filing';evidence:{value:{company:Identifier;form:string;filed:string;report_date:string|null;source_url:string}}};
+export type Candidate={kind:'candidate';entry:{candidate:{identifier:Identifier;name:string;listings:{ticker:Identifier}[]}}};
+export type Dataset={header:{id:string;kind:string;binding_id:string|null;row_count:number;query:Record<string,unknown>;created_at:string;policy?:string|null;provider:{instance_id:string;plugin_id:string;plugin_version:string};limitations:string[];conflicts:string[];error:{message:string}|null;coverage:{completeness:string}|null;document?:{source_url:string;retrieved_at:string;media_type:string}};rows:(Price|Fact|ReportedFact|Filing|Candidate)[];next_offset:number|null};
+export type Binding={record:{company:{candidate:{identifier:Identifier;name:string}};listing:{ticker:Identifier;exchange:Identifier|null}};status:{status:string}};
+export type ResearchView={view:View;data:Dataset;binding?:Binding;error?:string};

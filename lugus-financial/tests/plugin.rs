@@ -65,6 +65,7 @@ async fn host_rejects_incompatible_version_and_unadvertised_capability() {
 #[tokio::test]
 async fn protocol_failures_and_timeouts_close_the_child() {
     for (mode, kind) in [
+        ("eof", ErrorKind::Protocol),
         ("timeout", ErrorKind::Timeout),
         ("malformed", ErrorKind::Protocol),
         ("oversized", ErrorKind::Protocol),
@@ -72,6 +73,23 @@ async fn protocol_failures_and_timeouts_close_the_child() {
         let mut plugin = start(mode).await.unwrap();
         assert_eq!(plugin.list_filings(&query()).await.unwrap_err().kind, kind);
         assert!(!plugin.is_running());
+    }
+}
+
+#[tokio::test]
+async fn framed_source_failures_allow_a_later_request_on_the_same_process() {
+    for (mode, kind) in [
+        ("source_timeout", ErrorKind::Timeout),
+        ("source_unavailable", ErrorKind::Unavailable),
+    ] {
+        let mut plugin = start(mode).await.unwrap();
+        assert_eq!(plugin.fetch_facts(&query()).await.unwrap_err().kind, kind);
+        assert!(
+            plugin.is_running(),
+            "a completed source error must not poison the connection"
+        );
+        assert!(plugin.fetch_facts(&query()).await.unwrap().items.is_empty());
+        plugin.close().await.unwrap();
     }
 }
 #[tokio::test]

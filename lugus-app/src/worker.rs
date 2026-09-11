@@ -520,6 +520,11 @@ async fn execute_job(
             .as_ref()
             .is_err_and(|error| error.kind == lugus_financial::error::ErrorKind::Protocol);
     // Only wrapper-caused errors are cancellation/resource failures. Storage finalization errors win.
+    let interrupted = bounded
+        .budget
+        .cause
+        .as_ref()
+        .is_some_and(|e| matches!(e.kind, ErrorKind::Cancelled | ErrorKind::Timeout));
     let mut error = match outcome {
         Ok(()) => None,
         Err(_) if recording.finalization_failed.get() => Some(AppError::new(
@@ -546,11 +551,6 @@ async fn execute_job(
     job.provenance.runs = recording.runs;
     job.provenance.document = recording.document;
     job.provenance.instrument_observation = recording.instrument_observation;
-    let interrupted = error
-        .as_ref()
-        .into_iter()
-        .chain(bounded.budget.cause.as_ref())
-        .any(|e| matches!(e.kind, ErrorKind::Cancelled | ErrorKind::Timeout));
     if protocol_failed || interrupted || !bounded.inner.is_running() {
         let closed = bounded.inner.close().await;
         mark_unavailable(catalog, bounded.inner.identity(), job.generation);

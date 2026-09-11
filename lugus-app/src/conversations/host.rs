@@ -29,10 +29,21 @@ struct Inner {
     factory: Arc<dyn RuntimeFactory>,
     limits: ConversationLimits,
     options: ConversationOptions,
+    interpreter: Interpretation,
     state: Mutex<State>,
     admission: Arc<tokio::sync::Mutex<()>>,
     slots: Arc<Semaphore>,
     changed: watch::Sender<()>,
+}
+enum Interpretation {
+    None,
+    Runtime,
+    Custom(Arc<dyn crate::research::Interpreter>),
+}
+struct ExecutionRuntime {
+    options: ConversationOptions,
+    factory: Arc<dyn RuntimeFactory>,
+    interpreter: Option<Arc<dyn crate::research::Interpreter>>,
 }
 #[derive(Clone)]
 pub struct ConversationHost {
@@ -43,7 +54,35 @@ impl ConversationHost {
     pub async fn start(
         app: Application,
         factory: Arc<dyn RuntimeFactory>,
+        options: ConversationOptions,
+    ) -> Result<Self> {
+        Self::start_configured(app, factory, options, Interpretation::Runtime).await
+    }
+
+    /// Replace only interpretation; application validation and retrieval remain enforced.
+    pub async fn start_with_interpreter(
+        app: Application,
+        factory: Arc<dyn RuntimeFactory>,
+        options: ConversationOptions,
+        interpreter: Arc<dyn crate::research::Interpreter>,
+    ) -> Result<Self> {
+        Self::start_configured(app, factory, options, Interpretation::Custom(interpreter)).await
+    }
+
+    /// Explicit low-level compatibility harness. Normal chat uses `start` and application preparation.
+    pub async fn start_with_tools(
+        app: Application,
+        factory: Arc<dyn RuntimeFactory>,
+        options: ConversationOptions,
+    ) -> Result<Self> {
+        Self::start_configured(app, factory, options, Interpretation::None).await
+    }
+
+    async fn start_configured(
+        app: Application,
+        factory: Arc<dyn RuntimeFactory>,
         mut options: ConversationOptions,
+        interpreter: Interpretation,
     ) -> Result<Self> {
         let limits = app.conversation_limits().await?;
         options.run_limits = limits.effective_run_limits(options.run_limits, app.limits())?;
@@ -59,6 +98,7 @@ impl ConversationHost {
                 app,
                 factory,
                 options,
+                interpreter,
                 slots: Arc::new(Semaphore::new(limits.active_runs)),
                 limits,
                 admission: Arc::new(tokio::sync::Mutex::new(())),
@@ -157,6 +197,40 @@ impl ConversationHost {
         {
             return Ok(existing);
         }
+        // Snapshot before publishing admission. Preparation and answering share this choice.
+        let factory = self
+            .inner
+            .factory
+            .snapshot()
+            .unwrap_or_else(|| self.inner.factory.clone());
+        let mut options = self.inner.options.clone();
+        if let Some(timeout) = factory.run_timeout() {
+            if timeout.is_zero() {
+                return Err(failure(
+                    ErrorKind::InvalidInput,
+                    "runtime timeout must be positive",
+                ));
+            }
+            options.run_limits.timeout = options.run_limits.timeout.min(timeout);
+        }
+        let interpreter = match &self.inner.interpreter {
+            Interpretation::None => None,
+            Interpretation::Custom(interpreter) => Some(interpreter.clone()),
+            Interpretation::Runtime => Some(Arc::new(crate::research::RuntimeInterpreter::new(
+                factory.clone(),
+                options
+                    .run_limits
+                    .timeout
+                    .min(std::time::Duration::from_secs(60)),
+                std::time::Duration::from_millis(self.inner.limits.runtime_close_timeout_ms),
+            ))
+                as Arc<dyn crate::research::Interpreter>),
+        };
+        let runtime = ExecutionRuntime {
+            factory,
+            interpreter,
+            options,
+        };
         let (receipt_tx, mut receipt) = watch::channel(None);
         {
             let mut state = self.state();
@@ -190,7 +264,9 @@ impl ConversationHost {
             let host = self.clone();
             tokio::spawn(async move {
                 let result = host
-                    .admit_owned(epoch, request, gate, permit, cancel, receiver, receipt_tx)
+                    .admit_owned(
+                        epoch, request, gate, permit, cancel, receiver, receipt_tx, runtime,
+                    )
                     .await;
                 {
                     let mut state = host.state();
@@ -225,6 +301,7 @@ impl ConversationHost {
         cancel: watch::Sender<bool>,
         receiver: watch::Receiver<bool>,
         receipt: watch::Sender<Option<Result<RunRecord>>>,
+        runtime: ExecutionRuntime,
     ) -> Result<()> {
         let admission_epoch = epoch.clone();
         let admission = self
@@ -291,9 +368,10 @@ impl ConversationHost {
         };
         let execution = isolate(super::execution::execute(
             self.inner.app.clone(),
-            self.inner.factory.clone(),
+            runtime.factory,
             self.inner.limits.clone(),
-            self.inner.options.clone(),
+            runtime.options,
+            runtime.interpreter,
             run,
             attempt.clone(),
             cancel,
@@ -466,6 +544,7 @@ mod tests {
         let host = ConversationHost::recover(app).await.unwrap();
         let c = host.create("create", "Research").await.unwrap();
         let request = SendMessageRequest {
+            company_hint: None,
             conversation_id: c.id.clone(),
             request_id: "one".into(),
             text: "Research".into(),

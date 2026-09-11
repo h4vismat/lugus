@@ -1,5 +1,7 @@
 # lugus-app
 
+Default conversation hosts now interpret free-form requests, retrieve evidence in application code, and inject an immutable package into offline analysis. See [application-owned research preparation](../docs/application-research-preparation.md) for boundaries, policies and extension points.
+
 A framework-independent Rust application host for explicit provider research, durable scoped evidence references, and accepted view requests. Manual clients and the `lugus-agent::ToolExecutor` adapter share the same application operations. The host depends on provider, repository, store, clock and ID ports; JSON configuration, child processes and SQLite are composition adapters.
 
 ## Host contract

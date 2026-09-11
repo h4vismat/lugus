@@ -60,6 +60,7 @@ impl AgentRuntime for Runtime {
 }
 fn send(c: &Conversation, id: &str) -> SendMessageRequest {
     SendMessageRequest {
+        company_hint: None,
         conversation_id: c.id.clone(),
         request_id: id.into(),
         text: "Research two companies".into(),
@@ -78,7 +79,7 @@ async fn host(hold: bool) -> (support::Harness, ConversationHost, Arc<Factory>) 
         hold,
         ..Default::default()
     });
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         factory.clone(),
         ConversationOptions::default(),
@@ -126,7 +127,7 @@ async fn thesis_free_two_turns_freeze_history_and_reopen_without_replay() {
         1
     );
     host.shutdown().await.unwrap();
-    let reopened = ConversationHost::start(
+    let reopened = ConversationHost::start_with_tools(
         h.app.clone(),
         factory.clone(),
         ConversationOptions::default(),
@@ -404,9 +405,10 @@ async fn runtime_failures_are_terminal_and_cleanup_is_finite() {
             },
             ..Default::default()
         };
-        let host = ConversationHost::start(h.app.clone(), Arc::new(behavior.clone()), options)
-            .await
-            .unwrap();
+        let host =
+            ConversationHost::start_with_tools(h.app.clone(), Arc::new(behavior.clone()), options)
+                .await
+                .unwrap();
         let c = host.create("create", "Research").await.unwrap();
         let run = host.send(send(&c, "one")).await.unwrap();
         let completed = terminal(&host, &c, &run).await;
@@ -441,7 +443,7 @@ async fn runtime_failures_are_terminal_and_cleanup_is_finite() {
 async fn exact_duplicate_tool_result_has_one_durable_call_and_one_effect() {
     let h = support::Harness::new(&[("one", "ok")], HostBounds::default(), Limits::default()).await;
     let (behavior, _, _) = Behavior::new("tool_duplicate");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior.clone()),
         ConversationOptions::default(),
@@ -484,7 +486,7 @@ async fn exact_duplicate_tool_result_has_one_durable_call_and_one_effect() {
 async fn requested_tool_call_limit_prevents_second_effect() {
     let h = support::Harness::new(&[("one", "ok")], HostBounds::default(), Limits::default()).await;
     let (behavior, _, _) = Behavior::new("tool_two");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior),
         ConversationOptions {
@@ -519,7 +521,7 @@ async fn cancellation_joins_partial_provider_effect_and_preserves_exact_receipt(
     )
     .await;
     let (behavior, _, _) = Behavior::new("tool_drop");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior),
         ConversationOptions::default(),
@@ -575,7 +577,7 @@ async fn cancelled_shutdown_retains_ownership_until_runtime_close_and_late_cance
  {
     let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
     let (behavior, mut closing, release) = Behavior::new("close_gate");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior),
         ConversationOptions::default(),
@@ -645,9 +647,10 @@ async fn uncooperative_close_has_bounded_failure_and_releases_lease_after_shutdo
     )
     .await;
     let (behavior, _, _) = Behavior::new("close_hold");
-    let host = ConversationHost::start(app, Arc::new(behavior), ConversationOptions::default())
-        .await
-        .unwrap();
+    let host =
+        ConversationHost::start_with_tools(app, Arc::new(behavior), ConversationOptions::default())
+            .await
+            .unwrap();
     let c = host.create("create", "Research").await.unwrap();
     let run = host.send(send(&c, "one")).await.unwrap();
     let record = terminal(&host, &c, &run).await;
@@ -664,7 +667,7 @@ async fn tool_identity_and_changed_duplicate_stop_turn_without_extra_effects() {
         let h =
             support::Harness::new(&[("one", "ok")], HostBounds::default(), Limits::default()).await;
         let (behavior, _, _) = Behavior::new(mode);
-        let host = ConversationHost::start(
+        let host = ConversationHost::start_with_tools(
             h.app.clone(),
             Arc::new(behavior),
             ConversationOptions::default(),
@@ -696,7 +699,7 @@ async fn small_event_channel_and_activity_storage_failure_cannot_block_finalizat
     )
     .await;
     let (behavior, _, _) = Behavior::new("flood");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         app.clone(),
         Arc::new(behavior),
         ConversationOptions::default(),
@@ -813,9 +816,10 @@ async fn dropped_send_during_admission_is_registered_and_shutdown_joins_it() {
     )
     .await;
     let factory = Arc::new(Factory::default());
-    let host = ConversationHost::start(app, factory.clone(), ConversationOptions::default())
-        .await
-        .unwrap();
+    let host =
+        ConversationHost::start_with_tools(app, factory.clone(), ConversationOptions::default())
+            .await
+            .unwrap();
     let c = host.create("create", "Research").await.unwrap();
     armed.store(true, Ordering::SeqCst);
     let sender = tokio::spawn({
@@ -891,9 +895,10 @@ async fn journal_budget_failure_stops_turn_and_records_safe_failure() {
     .await
     .unwrap();
     let (behavior, _, _) = Behavior::new("tool_duplicate");
-    let host = ConversationHost::start(app, Arc::new(behavior), ConversationOptions::default())
-        .await
-        .unwrap();
+    let host =
+        ConversationHost::start_with_tools(app, Arc::new(behavior), ConversationOptions::default())
+            .await
+            .unwrap();
     let c = host.create("create", "Research").await.unwrap();
     let run = host.send(send(&c, "one")).await.unwrap();
     assert_eq!(terminal(&host, &c, &run).await.status, RunStatus::Failed);
@@ -918,7 +923,7 @@ async fn concurrent_pending_duplicate_and_abandoned_tool_future_never_redispatch
         )
         .await;
         let (behavior, _, _) = Behavior::new(mode);
-        let host = ConversationHost::start(
+        let host = ConversationHost::start_with_tools(
             h.app.clone(),
             Arc::new(behavior),
             ConversationOptions::default(),
@@ -967,7 +972,7 @@ async fn many_waiters_always_observe_committed_terminal_state() {
 async fn tool_result_storage_failure_keeps_unknown_intent_and_fails_turn() {
     let h = support::Harness::new(&[("one", "ok")], HostBounds::default(), Limits::default()).await;
     let (behavior, _, _) = Behavior::new("tool_duplicate");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior),
         ConversationOptions::default(),
@@ -992,7 +997,7 @@ async fn tool_result_storage_failure_keeps_unknown_intent_and_fails_turn() {
 async fn selected_evidence_is_frozen_in_second_turn_user_data_after_workspace_changes() {
     let h = support::Harness::new(&[("one", "ok")], HostBounds::default(), Limits::default()).await;
     let factory = Arc::new(Factory::default());
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         factory.clone(),
         ConversationOptions::default(),
@@ -1071,7 +1076,7 @@ async fn unsuccessful_provider_receipt_replays_exactly_and_is_not_a_journal_fail
     )
     .await;
     let (behavior, _, _) = Behavior::new("tool_duplicate");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior.clone()),
         ConversationOptions::default(),
@@ -1105,7 +1110,7 @@ async fn unsuccessful_provider_receipt_replays_exactly_and_is_not_a_journal_fail
 async fn closed_old_event_sender_cannot_write_after_new_owner_activates() {
     let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
     let (behavior, _, _) = Behavior::new("retain_events");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior.clone()),
         ConversationOptions::default(),
@@ -1144,7 +1149,7 @@ async fn closed_old_event_sender_cannot_write_after_new_owner_activates() {
 async fn dropped_shutdown_waiter_and_repeated_callers_observe_same_cleanup_failure() {
     let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
     let (behavior, mut closing, release) = Behavior::new("close_gate_error");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior),
         ConversationOptions::default(),
@@ -1178,7 +1183,7 @@ async fn dropped_shutdown_waiter_and_repeated_callers_observe_same_cleanup_failu
 async fn cancellation_during_factory_creation_is_terminal_without_constructing_runtime() {
     let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
     let (behavior, _, _) = Behavior::new("factory_hold");
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior.clone()),
         ConversationOptions::default(),
@@ -1262,7 +1267,7 @@ async fn needs_attention_survives_offline_reopening() {
 async fn actionable_runtime_failure_category(mode: &'static str, expected_kind: &str) {
     let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
     let (behavior, _, _) = Behavior::new(mode);
-    let host = ConversationHost::start(
+    let host = ConversationHost::start_with_tools(
         h.app.clone(),
         Arc::new(behavior.clone()),
         ConversationOptions::default(),

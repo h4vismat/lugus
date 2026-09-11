@@ -69,6 +69,14 @@ pub trait ConversationStore: Send {
     fn create_conversation(&mut self, request_id: &str, title: &str) -> Result<Conversation>;
     fn conversation(&self, id: &str) -> Result<Conversation>;
     fn conversations(&self, page: PageRequest) -> Result<ConversationPage<Conversation>>;
+    /// Optional newest-activity listing; existing adapters retain their original contract.
+    fn recent_conversations(&self, _page: PageRequest) -> Result<ConversationPage<Conversation>> {
+        Err(AppError::new(
+            crate::ErrorKind::Unsupported,
+            "recent conversations are unavailable",
+            false,
+        ))
+    }
     fn workspace(&self, conversation_id: &str) -> Result<WorkspaceState>;
     fn mutate_workspace(
         &mut self,
@@ -82,6 +90,28 @@ pub trait ConversationStore: Send {
         page: PageRequest,
     ) -> Result<ConversationPage<Message>>;
     fn run(&self, conversation_id: &str, run_id: &str) -> Result<RunRecord>;
+    /// Persist the exact research package once for an active, fenced attempt.
+    fn save_preparation(&mut self, _attempt: &RunAttempt, _serialized: &str) -> Result<()> {
+        Err(AppError::new(
+            crate::ErrorKind::Unsupported,
+            "research preparation is unavailable",
+            false,
+        ))
+    }
+    fn preparation(&self, _conversation_id: &str, _run_id: &str) -> Result<Option<String>> {
+        Err(AppError::new(
+            crate::ErrorKind::Unsupported,
+            "research preparation is unavailable",
+            false,
+        ))
+    }
+    fn latest_preparation(&self, _conversation_id: &str) -> Result<Option<String>> {
+        Err(AppError::new(
+            crate::ErrorKind::Unsupported,
+            "research preparation is unavailable",
+            false,
+        ))
+    }
     fn runs(&self, conversation_id: &str, page: PageRequest)
     -> Result<ConversationPage<RunRecord>>;
     fn activity(

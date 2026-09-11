@@ -73,7 +73,11 @@ async fn python_process_to_sqlite_refresh_and_offline_reopen() {
 #[tokio::test]
 async fn real_sec_plugin_initializes_without_network() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/sec-edgar/plugin.json");
-    let (manifest, directory) = Manifest::load(path).unwrap();
+    let (mut manifest, directory) = Manifest::load(path).unwrap();
+    // Protocol initialization remains available without importing EdgarTools.
+    // Live retrieval uses the virtual environment selected by the shipped manifest.
+    manifest.command = "python3".into();
+    let expected_version = manifest.version.clone();
     let mut plugin = Plugin::start(
         manifest,
         directory,
@@ -86,6 +90,6 @@ async fn real_sec_plugin_initializes_without_network() {
     assert_eq!(plugin.capabilities().get("fundamentals"), Some(&1));
     assert_eq!(plugin.capabilities().get("filings"), Some(&1));
     assert_eq!(plugin.capabilities().get("company_resolution"), Some(&1));
-    assert_eq!(plugin.identity().plugin_version, "0.2.0");
+    assert_eq!(plugin.identity().plugin_version, expected_version);
     plugin.close().await.unwrap();
 }

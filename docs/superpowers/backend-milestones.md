@@ -4,7 +4,7 @@ Last updated: 2026-09-10. This document records agreed direction, completed work
 
 ## Start here
 
-The next milestone is **active-workspace background refresh** (milestone 5). HTML filing text and passage references, together with their prerequisite backend milestones, were merged locally into `main` by fast-forward to `1c6f782` on 2026-09-10. The implementation is now available in the main checkout at `/Users/havismat/lugus`. Read the application README and completed filing-passages plan before designing the next milestone.
+The next milestone is **desktop integration** (milestone 6). The user deferred background refresh (milestone 5) on 2026-09-10: fresh research can start in a new workspace, and opening or revisiting a workspace must not schedule automatic retrieval. HTML filing text and passage references, together with their prerequisite backend milestones, were merged locally into `main` by fast-forward to `1c6f782` on 2026-09-10. The implementation is now available in the main checkout at `/Users/havismat/lugus`. Read the application README and completed filing-passages plan before designing the next milestone.
 
 The source branch `codex/filing-passages` and existing worktree `/private/tmp/lugus-backend-development` are preserved. Earlier implementation plans record their original branch/worktree state as historical context; do not repeat completed work based on those pre-merge notes. Pending unrelated files in the main checkout were preserved.
 
@@ -15,8 +15,8 @@ This integration was local only. Nothing was pushed or published; publishing rem
 - Lugus is a desktop research workspace combining conversation with persistent financial views. A workspace belongs to a conversation and may cover several companies.
 - The layout has a left sidebar for recent conversations and pinned work, a conversation pane with a bottom composer, and an adjacent resizable, tabbed research area.
 - Users and agents can open the same research views. Data access does not require sending a message first.
-- Agents may fetch fresh data through activated capabilities without routine confirmation. Open views refresh automatically only for the active workspace.
-- Background data refresh does not start model turns, rerun assessments, or alter saved evidence. Updates preserve the user's reading position and view selections.
+- Agents may fetch fresh data through activated capabilities without routine confirmation. Background refresh is deferred; workspace creation, activation and restoration do not fetch data by themselves.
+- Explicit research fetches preserve existing evidence, reviews, reading position and view selections. Show retrieval and effective dates; a new workspace contains fresh data only after a successful fetch.
 - Initial views: company overview with a basic historical chart, reported fundamentals, filing list/reader, and a minimal thesis/review history view.
 - Defer plugin management UI, advanced charting, configurable dashboards, and dedicated comparison views.
 - Tauri with a TypeScript frontend is the preferred direction, pending desktop-host validation. Core financial and application logic stays independent of that choice.
@@ -117,17 +117,21 @@ Version 1 supports HTML with strict UTF-8 or explicitly declared Windows-1252. V
 
 **Exit met:** ask about a selected HTML/Inline XBRL passage through the actual runtime, resolve its exact source, and retain the original selection unchanged after a same-URL revision, restart and provider removal.
 
-### 5. Active-workspace background refresh
+### 5. Active-workspace background refresh — deferred
 
-Implement freshness policies, request deduplication, provider rate-limit handling, bounded retries/cancellation, and workspace-switch behavior. Schedule automatic refresh only for the active workspace; associate late results with their origin.
+Decision on 2026-09-10: do not implement background refresh for the initial desktop release. Users can start new research in a new workspace; explicit user/agent fetches remain available. Creating, switching or restoring a workspace does not initiate retrieval or model execution.
 
-Keep data refresh independent of agent execution and immutable review history. Return enough state for the UI to preserve chart ranges, table selections, and document position.
+Keep retrieval dates and effective data dates visible. New retrievals create new evidence references, preserving saved reviews and existing selected evidence. A dedicated Fetch latest data action in an existing workspace is a possible later feature, not an initial-release requirement.
 
-**Exit:** fake-clock integration tests verify active/inactive workspace scheduling, overlapping requests, late results, failures, offline/stale data, and unchanged saved evidence.
+The former scheduler scope (freshness policies, deduplication, rate-limit cooldowns, bounded retries and fake-clock scheduling tests) is deferred. This milestone is not a prerequisite for desktop integration.
 
 ### 6. Desktop integration
 
 Validate Tauri/TypeScript against the established backend contracts, then implement the approved layout and initial research views. Include the minimal thesis/review workflow supported by the existing durable-review backend.
+
+Platform decision on 2026-09-10: macOS first, validating application feasibility before expanding to other operating systems. The [macOS host probe](spikes/2026-09-10-desktop-host/README.md) records native build, scoped provider retrieval, offline restoration and shutdown verification. It is a disposable feasibility result, not the complete desktop milestone or a selected production frontend library.
+
+The first chat-centered macOS implementation is now in [`lugus-desktop`](../../lugus-desktop/README.md): recent conversations on the left, agent conversation in the center, and saved company price/fundamental evidence on the right. Native build and offline restoration have been checked with explicitly synthetic fixtures. This is a working initial slice; full document presentation, settings UI, distribution signing and the wider research workflow remain outstanding.
 
 This milestone owns desktop transport, rendering, keyboard/focus behavior, view-state restoration, and packaging. Financial selection rules and provider orchestration remain in the backend.
 
@@ -135,9 +139,9 @@ This milestone owns desktop transport, rendering, keyboard/focus behavior, view-
 
 ## Backend acceptance workflow before desktop implementation
 
-Resolve `$IBM` → select its market instrument → fetch available data through configured capabilities → ask questions → request structured research views → save and reopen the conversation → refresh only the active workspace → inspect an earlier review with its original evidence.
+Resolve `$IBM` → select its market instrument → fetch available data through configured capabilities → ask questions → request structured research views → save and reopen the conversation offline → start fresh research in a new workspace → inspect an earlier review with its original evidence.
 
-This full workflow is not yet implemented. The application runtime, company-to-market binding, durable conversations and HTML filing text/passages are complete; active-workspace refresh and desktop integration remain. The conversation acceptance uses a thesis-free runtime; the separate legacy fixture still exercises a real persisted thesis.
+This full workflow is not yet implemented. The application runtime, company-to-market binding, durable conversations and HTML filing text/passages are complete; desktop integration is next and background refresh is deferred. The conversation acceptance uses a thesis-free runtime; the separate legacy fixture still exercises a real persisted thesis.
 
 ## Reading list
 

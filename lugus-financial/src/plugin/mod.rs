@@ -222,6 +222,9 @@ impl Plugin {
             serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
         let timeout = self.limits.timeout;
         let max = self.limits.max_response_bytes;
+        // A complete source error leaves framing synchronized. Transport failures,
+        // deadlines and protocol violations still invalidate the process.
+        let mut source_error = false;
         let result = tokio::time::timeout(timeout, async {
             let stdin = self
                 .stdin
@@ -263,6 +266,7 @@ impl Plugin {
                     .cloned()
                     .and_then(|v| serde_json::from_value(v).ok())
                     .unwrap_or(fallback);
+                source_error = kind != ErrorKind::Protocol;
                 return Err(Error {
                     kind,
                     message: error["message"].as_str().unwrap().to_owned(),
@@ -286,10 +290,11 @@ impl Plugin {
             ))
         });
         if result.as_ref().is_err_and(|e| {
-            matches!(
-                e.kind,
-                ErrorKind::Timeout | ErrorKind::Protocol | ErrorKind::Unavailable
-            )
+            !source_error
+                && matches!(
+                    e.kind,
+                    ErrorKind::Timeout | ErrorKind::Protocol | ErrorKind::Unavailable
+                )
         }) {
             let _ = self.close().await;
         }

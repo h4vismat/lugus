@@ -20,7 +20,7 @@ for line in sys.stdin:
         root.mkdir(exist_ok=True)
         (root / 'pid').write_text(str(os.getpid()))
         result = {'protocol_version': 2 if mode == 'startup_failure' else 1,
-                  'plugin_id': 'worker-fixture', 'plugin_version': config.get('version', '1'),
+                  'plugin_id': config.get('plugin_id', 'worker-fixture'), 'plugin_version': config.get('version', '1'),
                   'capabilities': {'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1, 'instrument_lookup': 2 if mode == 'instrument_unsupported' else 1}}
     else:
         cursor = params.get('cursor')
@@ -33,6 +33,11 @@ for line in sys.stdin:
                 ready, _, _ = select.select([sys.stdin], [], [], 0.005)
                 if ready and not os.read(sys.stdin.fileno(), 1):
                     raise SystemExit(0)
+        if mode in ('source_timeout_once', 'source_unavailable_once'):
+            kind = 'timeout' if mode == 'source_timeout_once' else 'unavailable'
+            mode = 'ok'
+            print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'error': {'code': -32000, 'message': 'temporary source failure', 'data': {'kind': kind}}}), flush=True)
+            continue
         if mode == 'protocol':
             print('invalid-json', flush=True)
             continue
@@ -47,9 +52,15 @@ for line in sys.stdin:
                 if mode == 'apple_escaped': result['items'][0]['source_url'] += '\\' * 1024
                 if mode == 'apple_multiple':
                     result['items'][0]['listings'].append({'ticker':{'namespace':'sec:ticker','value':'APPLB'},'exchange':{'namespace':'sec:exchange','value':'NYSE'}})
+                source_input = params['query'].get('text', params['query'].get('identifier', {}).get('value', '')).upper()
+                if mode == 'apple_compare' and (source_input in ('MSFT', '0000789019') or 'MICROSOFT' in source_input):
+                    result['items'][0].update(identifier={'namespace':'sec:cik','value':'0000789019'},name='Microsoft Corp.',listings=[{'ticker':{'namespace':'sec:ticker','value':'MSFT'},'exchange':{'namespace':'sec:exchange','value':'NASDAQ'}}])
+                if params['query']['kind'] == 'name' and params['query']['text'].casefold() == 'apple inc.':
+                    result['items'][0]['match_reasons'] = ['exact_name']
                 if params['query']['kind'] == 'identifier':
                     identifier = params['query']['identifier']
-                    if identifier['value'].upper() in ('AAPL', '0000320193'):
+                    expected = [result['items'][0]['identifier']['value']] + [l['ticker']['value'] for l in result['items'][0]['listings']]
+                    if identifier['value'].upper() in expected:
                         result['items'][0]['match_reasons'] = ['exact_identifier']
                     else:
                         result['items'] = []
@@ -57,6 +68,8 @@ for line in sys.stdin:
             result = {'identifier': params['identifier'], 'name': 'Fixture', 'aliases': [], 'listings': [], 'source_url': 'https://example.test/company', 'source_checksum': 'a' * 64, 'retrieved_at': '2026-09-09T00:00:00Z', 'match_reasons': []}
         elif method == 'instrument_lookup.lookup':
             result = {'instrument': {'namespace':'yahoo:symbol','value':'AAPL'},'issuer_name':'Apple Inc.','ticker':'AAPL','exchange':{'namespace':'yahoo:exchange','value':'NMS'},'kind':'equity','issuer_identifiers':[],'source_url':'https://example.test/instrument','source_checksum':'b'*64,'retrieved_at':'2026-09-09T00:00:00Z'}
+            if mode == 'apple_compare' and params['instrument']['value'] == 'MSFT':
+                result.update(instrument={'namespace':'yahoo:symbol','value':'MSFT'},issuer_name='Microsoft Corp.',ticker='MSFT')
             if mode == 'apple_wrong_issuer': result['issuer_name'] = 'Another Issuer Inc.'
             if mode == 'apple_wrong_exchange': result['exchange']['value'] = 'NYQ'
             if mode == 'apple_missing': result['issuer_name'] = None

@@ -36,3 +36,4 @@ pub use bindings::*;
 pub mod conversations;
 
 pub mod passages;
+pub mod research;

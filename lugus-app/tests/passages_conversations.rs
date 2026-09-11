@@ -85,11 +85,15 @@ async fn passage_is_frozen_as_untrusted_runtime_data_and_duplicate_turn_retains_
     let frozen = FrozenReference::from_passage(&passage, &ConversationLimits::default()).unwrap();
     frozen.validate(&ConversationLimits::default()).unwrap();
     let factory = Arc::new(Factory::default());
-    let host =
-        ConversationHost::start(app.clone(), factory.clone(), ConversationOptions::default())
-            .await
-            .unwrap();
+    let host = ConversationHost::start_with_tools(
+        app.clone(),
+        factory.clone(),
+        ConversationOptions::default(),
+    )
+    .await
+    .unwrap();
     let send = SendMessageRequest {
+        company_hint: None,
         conversation_id: c.id.clone(),
         request_id: "send".into(),
         text: "Explain the selected passage".into(),
@@ -269,12 +273,16 @@ async fn oversized_required_passage_rejects_before_runtime_or_turn_admission() {
         .await
         .unwrap();
     let factory = Arc::new(Factory::default());
-    let host =
-        ConversationHost::start(app.clone(), factory.clone(), ConversationOptions::default())
-            .await
-            .unwrap();
+    let host = ConversationHost::start_with_tools(
+        app.clone(),
+        factory.clone(),
+        ConversationOptions::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         host.send(SendMessageRequest {
+            company_hint: None,
             conversation_id: c.id.clone(),
             request_id: "turn".into(),
             text: "Explain".into(),
@@ -382,12 +390,16 @@ async fn injected_sparse_node_ids_survive_preparation_and_frozen_runtime_admissi
             node_id
         );
         let factory = Arc::new(Factory::default());
-        let host =
-            ConversationHost::start(app.clone(), factory.clone(), ConversationOptions::default())
-                .await
-                .unwrap();
+        let host = ConversationHost::start_with_tools(
+            app.clone(),
+            factory.clone(),
+            ConversationOptions::default(),
+        )
+        .await
+        .unwrap();
         let run = host
             .send(SendMessageRequest {
+                company_hint: None,
                 conversation_id: conversation.id.clone(),
                 request_id: "select-sparse-node".into(),
                 text: "Explain the selected passage".into(),

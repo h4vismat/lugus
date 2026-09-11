@@ -371,7 +371,7 @@ async fn execute(
     fixture: Fixture,
     output: &Output,
 ) -> CliResult<Value> {
-    let host = match ConversationHost::start(
+    let host = match ConversationHost::start_with_tools(
         app.clone(),
         Arc::new(Factory(fixture)),
         ConversationOptions::default(),

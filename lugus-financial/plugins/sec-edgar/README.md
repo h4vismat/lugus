@@ -1,6 +1,6 @@
 # SEC EDGAR provider
 
-A separately executed Python 3.10+ provider implementing [Lugus protocol v1](../../docs/protocol/v1.md). Uses only Python's standard library. The host runs `plugin.json` from this directory; Python is never embedded in the Rust host.
+A separately executed Python 3.10+ provider implementing [Lugus protocol v1](../../docs/protocol/v1.md). Uses [EdgarTools](https://github.com/dgunning/edgartools) 5.57.0 for SEC HTTP retrieval. The host runs `plugin.json` from this directory; Python is never embedded in the Rust host.
 
 ## Installation and configuration
 
@@ -8,9 +8,12 @@ Copy this directory to the desired plugin location, then create a virtual enviro
 
 ```sh
 python3 -m venv /absolute/path/to/sec-edgar/.venv
+/absolute/path/to/sec-edgar/.venv/bin/python -m pip install -r /absolute/path/to/sec-edgar/requirements.txt
 ```
 
-Set `command` in your installed copy of `plugin.json` to the absolute path `/absolute/path/to/sec-edgar/.venv/bin/python`. Keep `args` as `["main.py"]`. Alternatively, the supplied manifest uses `python3` from the host's PATH without third-party dependencies. Select the manifest explicitly in the host.
+The supplied manifest uses `.venv/bin/python`, resolved relative to the plugin directory. An installed copy can instead use the absolute interpreter path. Keep `args` as `["main.py"]` and select the manifest explicitly in the host. On Windows, use `.venv/Scripts/python.exe`. Existing installations must install the requirements and update their manifest to provider version `0.3.0`.
+
+Use an isolated virtual environment with the pinned requirements. `httpx2` is not supported by this adapter. Protocol initialization and injected-fixture tests work without EdgarTools; a real retrieval with missing or incompatible dependencies returns an actionable `configuration` error.
 
 Send configuration only through `initialize`:
 
@@ -19,6 +22,14 @@ Send configuration only through `initialize`:
 ```
 
 Replace the example with your identifying contact information. The provider does not persist configuration or emit it in diagnostics. It requires HTTPS and the identifying User-Agent on every request. Stdout contains only flushed JSON-RPC responses; no batches or notifications are accepted.
+
+## EdgarTools boundary
+
+`edgar_transport.py` adapts EdgarTools's reusable HTTP client to Lugus's transport interface. All five SEC operations use that edge. Lugus retains pure JSON decoding and normalization: high-level library JSON/DataFrame conversions are deliberately avoided because binary floats lose decimal precision and regenerated documents cannot preserve source checksums. This integration does not add standardized statements or new filing extraction capabilities.
+
+Lugus owns retries, cooldowns, byte limits, redirect validation and snapshot pagination. The adapter uses no EdgarTools retry wrappers, so attempts cannot multiply. HTTPS certificate validation is enforced, HTTP/1.1 connections are reused, and redirects are checked before each destination is contacted (at most five hops). A stream returns each network chunk to the caller so slow trickles cannot hide the overall deadline.
+
+EdgarTools's response cache is disabled: successful root queries retrieve new evidence, while Lugus owns durable storage and explicit reuse. Import-time library cache files are isolated in a temporary directory and cleaned up when the process exits. The configured identity is sent as a request header, without calling interactive identity prompts or persisting the identity in library configuration.
 
 ## Data and pagination
 
@@ -39,10 +50,10 @@ Each source response is bounded to 32 MiB; historical submissions share that agg
 ## Offline verification
 
 ```sh
-python3 -m unittest discover -s plugins/sec-edgar/tests -v
+lugus-financial/plugins/sec-edgar/.venv/bin/python -m unittest discover -s lugus-financial/plugins/sec-edgar/tests -v
 ```
 
-Run from the repository root. Tests use injected transport fixtures and an actual JSON-RPC subprocess; no live SEC access occurs. Live checks require an explicitly configured contact identity and are outside the default test suite.
+Run from the workspace root. Tests use injected transport fixtures, the installed EdgarTools client with simulated HTTP responses, and an actual JSON-RPC subprocess recovering from a source timeout. They cover exact values and bytes, source checksums, pagination, retries, cooldowns, identity changes, dependency failures, redirects and streaming deadlines. No live SEC access occurs. System Python can run the original fixture tests and skips the EdgarTools-specific tests when the dependency is absent. Live checks require an explicitly configured contact identity and are outside the default test suite.
 
 ## Company resolution (capability v1)
 
@@ -79,3 +90,10 @@ limits, SEC URL restrictions, User-Agent, rate limiting and retry policy apply.
 Name queries are bounded to 256 UTF-8 bytes; namespace/identifier/cursor values to
 128 bytes; page sizes are integers from 1 through 100. Unsupported namespaces,
 invalid requests and malformed source data retain separate error kinds.
+## Fetch recovery
+
+The transport retains source cooldowns across requests. Long Retry-After values
+are returned immediately and remain enforced on later requests. HTTP 401/403
+requires checking source access and identifying User-Agent configuration; repeated
+unchanged requests are not an automatic recovery. Hard host deadlines still close
+the process. See the [recovery report](../../../docs/data-fetch-recovery.md).

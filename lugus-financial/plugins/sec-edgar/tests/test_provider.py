@@ -49,6 +49,24 @@ class ProviderTests(unittest.TestCase):
         query=dict(QUERY,forms=['20-F'])
         self.assertEqual(len(p.decode_facts(p.parse_json(FACTS),query,'url',STAMP)),1)
         self.assertEqual(p.decode_facts({'cik':320193,'facts':{}},QUERY,'url',STAMP),[])
+    def test_optional_labels_preserve_facts_when_empty_null_or_missing(self):
+        for label in ('', None, 'Reported assets'):
+            with self.subTest(label=label):
+                payload=p.parse_json(FACTS)
+                payload['facts']['us-gaap']['Assets']['label']=label
+                facts=p.decode_facts(payload,QUERY,'url',STAMP)
+                self.assertEqual(len(facts),3)
+                self.assertEqual(facts[0]['label'],None if label=='' else label)
+                self.assertEqual(facts[0]['value'],'12345678901234567890.123456789')
+                self.assertIsNone(facts[2]['label'])
+    def test_optional_labels_reject_invalid_types(self):
+        for label in (0, False, [], {}):
+            with self.subTest(label=label):
+                payload=p.parse_json(FACTS)
+                payload['facts']['us-gaap']['Assets']['label']=label
+                with self.assertRaises(p.ProviderError) as caught:
+                    p.decode_facts(payload,QUERY,'url',STAMP)
+                self.assertEqual(caught.exception.kind,'malformed_data')
     def test_malformed_source_does_not_become_empty(self):
         for data in ({}, {'facts':[]}, {'facts':{'us-gaap':{'Assets':{'units':{'USD':[{'val':None}]}}}}}):
             with self.assertRaises(p.ProviderError) as err: p.decode_facts(data,QUERY,'url',STAMP)
@@ -107,6 +125,50 @@ class ProviderTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
+    def test_forbidden_requires_configuration_attention_without_retry(self):
+        from urllib.error import HTTPError
+        from email.message import Message
+        class Opener:
+            def open(self, *args, **kwargs):
+                raise HTTPError('https://data.sec.gov/test', 403, 'denied', Message(), None)
+        transport = p.HttpTransport('Test test@example.com', opener_factory=lambda _: Opener(),
+                                    sleep=lambda _: self.fail('access denial must not retry'))
+        with self.assertRaises(p.ProviderError) as caught:
+            transport.get('https://data.sec.gov/test', 100)
+        self.assertEqual(caught.exception.kind, 'configuration')
+
+    def test_long_rate_limit_blocks_later_requests_until_cooldown_expires(self):
+        from urllib.error import HTTPError
+        from email.message import Message
+        headers = Message(); headers['Retry-After'] = '60'
+        now = [0]; calls = []
+        class Opener:
+            def open(self, *args, **kwargs):
+                calls.append(1)
+                raise HTTPError('https://data.sec.gov/test', 429, 'busy', headers, None)
+        transport = p.HttpTransport('Test test@example.com', opener_factory=lambda _: Opener(),
+                                    monotonic=lambda: now[0], sleep=lambda _: self.fail('no early retry'))
+        with self.assertRaises(p.ProviderError): transport.get('https://data.sec.gov/test', 100)
+        now[0] = 20
+        with self.assertRaises(p.ProviderError) as caught: transport.get('https://data.sec.gov/test', 100)
+        self.assertEqual(caught.exception.retry_after_seconds, 40)
+        self.assertEqual(len(calls), 1)
+        now[0] = 60
+        with self.assertRaises(p.ProviderError): transport.get('https://data.sec.gov/test', 100)
+        self.assertEqual(len(calls), 2)
+
+    def test_expired_deadline_after_limiter_does_not_start_network_request(self):
+        now = [0]
+        class Opener:
+            def open(inner, *args, **kwargs): self.fail('deadline expired before IO')
+        def sleep(delay): now[0] += 41
+        transport = p.HttpTransport('Test test@example.com', opener_factory=lambda _: Opener(),
+                                    monotonic=lambda: now[0], sleep=sleep)
+        transport.next_request = 1
+        with self.assertRaises(p.ProviderError) as caught:
+            transport.get('https://data.sec.gov/test', 100)
+        self.assertEqual(caught.exception.kind, 'timeout')
+
     def test_redirect_passes_shared_request_limiter(self):
         from urllib.request import Request
         calls=[]

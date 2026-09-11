@@ -110,7 +110,10 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(provider.handle(p,{'jsonrpc':'2.0','id':True,'method':'initialize'})['error']['code'],-32600)
 
     def test_typed_transport_failures(self):
+        from recovery import Recovery
         for kind in ('rate_limited','timeout','unavailable','not_found','malformed_data'):
+            # Independent failure scenarios must not share a source cooldown.
+            self.p.recovery = Recovery(sleep=lambda _: None, jitter=lambda: 0)
             def fetch(*args): raise provider.ProviderError(kind,'fixture failure')
             self.p.fetch=fetch
             with self.subTest(kind=kind), self.assertRaises(provider.ProviderError) as caught: self.p.daily(Q)

@@ -4,13 +4,14 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 import json
+import math
 import re
 import secrets
 import socket
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, unquote, quote
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.request import Request, HTTPRedirectHandler
 
 MAX_DOCUMENT = 10 * 1024 * 1024
 MAX_SOURCE = 32 * 1024 * 1024
@@ -73,6 +74,7 @@ def decode_facts(payload,query,url,retrieved_at):
             for concept, metadata in concepts.items():
                 text(concept)
                 label=metadata.get('label')
+                if label == '': label=None
                 if label is not None: text(label)
                 for unit, observations in metadata['units'].items():
                     text(unit)
@@ -155,18 +157,28 @@ class HttpTransport:
     """Shared per-process limiter: at most two starts/second, three attempts."""
     def __init__(self,user_agent,opener_factory=None,sleep=time.sleep,monotonic=time.monotonic):
         self.user_agent=user_agent
-        self.opener_factory=opener_factory or (lambda archive:build_opener(SafeRedirect(archive,self.wait_turn)))
+        self.opener_factory=opener_factory or self.edgar_opener
         self.sleep,self.monotonic=sleep,monotonic
         self.next_request=0
+        self.blocked_until=0
+        self.blocked_kind='rate_limited'
+    def edgar_opener(self,archive):
+        from edgar_transport import EdgarOpener
+        return EdgarOpener(archive,self.wait_turn,self.monotonic)
     def wait_turn(self):
         delay=max(0,self.next_request-self.monotonic())
         if delay: self.sleep(delay)
         self.next_request=self.monotonic()+0.5
     def get(self,url,max_bytes,archive=False):
         validate_url(url,archive)
+        remaining=self.blocked_until-self.monotonic()
+        if remaining>0:
+            raise ProviderError(self.blocked_kind,'SEC is cooling down; retry after the indicated delay',retry_after_seconds=math.ceil(remaining))
         deadline=self.monotonic()+40
         for attempt in range(3):
             self.wait_turn()
+            if self.monotonic()>=deadline:
+                raise ProviderError('timeout','SEC request deadline exceeded before request')
             try:
                 request=Request(url,headers={'User-Agent':self.user_agent,'Accept-Encoding':'identity'})
                 with self.opener_factory(archive).open(request,timeout=min(10,max(0.1,deadline-self.monotonic()))) as response:
@@ -191,7 +203,7 @@ class HttpTransport:
                     except ValueError:
                         try: retry=max(0,int((parsedate_to_datetime(header)-datetime.now(timezone.utc)).total_seconds())+1)
                         except (ValueError,TypeError,OverflowError): pass
-                kind='rate_limited' if exc.code==429 else 'not_found' if exc.code==404 else 'unavailable'
+                kind='rate_limited' if exc.code==429 else 'not_found' if exc.code==404 else 'configuration' if exc.code in (401,403) else 'unavailable'
                 error=ProviderError(kind,f'SEC HTTP {exc.code}',retry_after_seconds=retry)
                 transient=exc.code in (429,500,502,503,504)
                 exc.close()
@@ -203,7 +215,13 @@ class HttpTransport:
             except ValueError as exc:
                 raise ProviderError('malformed_data','Invalid HTTP metadata') from exc
             delay=retry if retry is not None else 2**attempt
-            if not transient or attempt==2 or delay>10 or self.monotonic()+delay>=deadline: raise error
+            if not transient or attempt==2 or delay>10 or self.monotonic()+delay>=deadline:
+                if transient and (error.kind=='rate_limited' or retry is not None):
+                    cooldown=max(retry or 0,60 if error.kind=='rate_limited' else 5)
+                    self.blocked_until=self.monotonic()+cooldown
+                    self.blocked_kind=error.kind
+                    error.retry_after_seconds=cooldown
+                raise error
             self.sleep(delay)
         raise error
 
@@ -224,7 +242,7 @@ class Provider:
             from resolution import Resolution
             self.resolution=Resolution(self.transport,self.clock)
             self.sessions.clear(); self.initialized=True
-            return {'protocol_version':1,'plugin_id':'sec-edgar','plugin_version':'0.2.0','capabilities':{'filings':1,'fundamentals':1,'company_resolution':1}}
+            return {'protocol_version':1,'plugin_id':'sec-edgar','plugin_version':'0.3.0','capabilities':{'filings':1,'fundamentals':1,'company_resolution':1}}
         if method not in ('filings.list','fundamentals.facts','filings.document','company_resolution.search','company_resolution.lookup'): raise ProviderError('unsupported','Method not found',-32601)
         if not self.initialized: raise ProviderError('configuration','Initialize first')
         if method=='company_resolution.search': return self.resolution.search(params)

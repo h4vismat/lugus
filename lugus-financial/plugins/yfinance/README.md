@@ -90,3 +90,11 @@ checksum canonicalization, exact source/library limitations and immutable storag
 The suite includes optional offline characterization of the pinned library using synthetic
 chart JSON; it performs no live requests. Run it with the plugin virtual environment to
 include that test; dependency-free execution skips only that characterization.
+## Fetch recovery
+
+Fresh history and instrument metadata reads share bounded transient retries and
+a per-process cooldown. Rate limiting returns a delay of at least 60 seconds;
+exhausted timeouts/outages return at least five seconds. Subsequent fresh requests
+respect that delay without hitting Yahoo. Snapshot pagination does not refetch.
+Missing or malformed data and configuration failures are not retried. See the
+[recovery report](../../../docs/data-fetch-recovery.md) for guarantees and limits.

@@ -20,6 +20,7 @@ pub use workspace::workspace_transition;
 mod execution;
 mod host;
 mod journal;
+mod preparation;
 mod runtime;
 pub use host::ConversationHost;
 pub use runtime::{ConversationOptions, RuntimeFactory};

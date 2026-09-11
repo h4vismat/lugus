@@ -1181,3 +1181,212 @@ fn zero_row_header_obeys_total_creation_bytes_without_persisting_a_dataset() {
     );
     assert!(s.read_fetch(&app_scope(), &f.id).is_ok());
 }
+
+fn all_facts_projection(run_id: i64) -> DatasetProjection {
+    serde_json::from_value(serde_json::json!({"kind":"all_facts","run_id":run_id})).unwrap()
+}
+
+#[test]
+fn all_facts_projection_is_strict() {
+    let projection = all_facts_projection(1);
+    assert_eq!(
+        serde_json::to_value(projection).unwrap(),
+        serde_json::json!({"kind":"all_facts","run_id":1})
+    );
+    for extra in ["query", "namespace", "workspace_id"] {
+        let mut value = serde_json::json!({"kind":"all_facts","run_id":1});
+        value[extra] = serde_json::json!({});
+        assert!(serde_json::from_value::<DatasetProjection>(value).is_err());
+    }
+}
+
+#[test]
+fn all_facts_freezes_every_original_disclosure_offline_with_partial_run_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let fin = dir.path().join("financial.sqlite");
+    let db = dir.path().join("app.sqlite");
+    let mut repo = SqliteRepository::open(&fin).unwrap();
+    let facts = (0..1003)
+        .map(|i| {
+            let mut f = fact("9007199254740993.000", "2024-03-01", instant("2023-12-31"));
+            f.filing_id = format!("disclosure-{i}");
+            f.namespace = ["us-gaap", "dei", "custom"][i % 3].into();
+            f.unit = ["USD", "shares", "USD/shares"][i % 3].into();
+            f.fiscal_year = None;
+            f.fiscal_period = None;
+            if i % 2 == 0 {
+                f.period = Period::Duration {
+                    start: "2023-01-01".parse().unwrap(),
+                    end: "2023-12-31".parse().unwrap(),
+                };
+            }
+            f
+        })
+        .collect::<Vec<_>>();
+    let run = repo.start_run(&provider(), &scope(), "both").unwrap();
+    for items in facts.chunks(100) {
+        repo.save_facts_page(
+            run,
+            &Page {
+                items: items.to_vec(),
+                next_cursor: Some("remaining".into()),
+            },
+            &|_| None,
+        )
+        .unwrap();
+    }
+    repo.finish_run(
+        run,
+        Some(&lugus_financial::error::Error::new(
+            lugus_financial::error::ErrorKind::Unavailable,
+            "SECRET",
+        )),
+    )
+    .unwrap();
+    let mut r = receipt(&repo, run);
+    r.provenance.command = FetchCommand::Facts {
+        instance_id: "local".into(),
+        query: scope(),
+    };
+    r.provenance.runs[0].kind = RunKind::Financial;
+    let mut s = store(&db, &fin);
+    let f = s.record_fetch(&r).unwrap();
+    let d = s
+        .create_dataset(&app_scope(), &f.id, all_facts_projection(run))
+        .unwrap();
+    assert_eq!(d.row_count, 1003);
+    assert_eq!(d.kind, DatasetKind::Facts);
+    assert_eq!(d.policy.as_deref(), Some("all-reported-facts-v1"));
+    assert_eq!(d.query, serde_json::to_value(scope()).unwrap());
+    assert_eq!(
+        d.selected_run.as_ref().unwrap().status,
+        lugus_financial::storage::RunStatus::Failed
+    );
+    assert!(d.limitations.iter().any(|s| s.contains("partial")));
+    assert!(!serde_json::to_string(&d).unwrap().contains("SECRET"));
+    let other = save_facts(
+        &mut repo,
+        vec![fact("1", "2024-03-01", instant("2023-12-31"))],
+    );
+    assert_eq!(
+        s.create_dataset(&app_scope(), &f.id, all_facts_projection(other))
+            .unwrap_err()
+            .kind,
+        ErrorKind::ScopeMismatch
+    );
+    let wrong = repo.start_run(&provider(), &scope(), "filings").unwrap();
+    repo.finish_run(wrong, None).unwrap();
+    r.provenance.runs[0].id = wrong;
+    r.provenance.command = FetchCommand::Filings {
+        instance_id: "local".into(),
+        query: scope(),
+    };
+    let wrong_fetch = s.record_fetch(&r).unwrap();
+    assert_eq!(
+        s.create_dataset(&app_scope(), &wrong_fetch.id, all_facts_projection(wrong))
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidInput
+    );
+    drop(s);
+    let s = store(&db, &fin);
+    let mut offset = 0;
+    let mut actual = Vec::new();
+    loop {
+        let page = s
+            .read_dataset(&app_scope(), &d.id, PageRequest { offset, limit: 100 })
+            .unwrap();
+        for row in page.rows {
+            let value = serde_json::to_value(row).unwrap();
+            assert_eq!(value["kind"], "reported_fact");
+            assert!(
+                value["evidence"]["retrieval"]["observation_id"]
+                    .as_i64()
+                    .unwrap()
+                    > 0
+            );
+            assert_eq!(
+                value["evidence"]["retrieval"]["retrieved_at"],
+                "2024-12-31T00:00:00Z"
+            );
+            assert!(
+                !value["evidence"]["retrieval"]["fingerprint"]
+                    .as_str()
+                    .unwrap()
+                    .is_empty()
+            );
+            let fact = value["evidence"]["value"].clone();
+            assert_eq!(fact["value"], "9007199254740993.000");
+            assert!(fact["label"].is_null());
+            assert!(fact["fiscal_year"].is_null());
+            assert!(fact["fiscal_period"].is_null());
+            actual.push(fact);
+        }
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    let mut expected = facts
+        .into_iter()
+        .map(|f| serde_json::to_value(f).unwrap())
+        .collect::<Vec<_>>();
+    actual.sort_by_key(|f| f["filing_id"].as_str().unwrap().to_owned());
+    expected.sort_by_key(|f| f["filing_id"].as_str().unwrap().to_owned());
+    assert_eq!(actual, expected);
+    let mut foreign = app_scope();
+    foreign.workspace_id = "foreign".into();
+    assert_eq!(
+        s.read_dataset(
+            &foreign,
+            &d.id,
+            PageRequest {
+                offset: 0,
+                limit: 1
+            }
+        )
+        .unwrap_err()
+        .kind,
+        ErrorKind::ScopeMismatch
+    );
+}
+
+#[test]
+fn all_facts_marks_remaining_source_pages_even_when_run_is_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let fin = dir.path().join("financial.sqlite");
+    let mut repo = SqliteRepository::open(&fin).unwrap();
+    let run = repo.start_run(&provider(), &scope(), "facts").unwrap();
+    repo.save_facts_page(
+        run,
+        &Page {
+            items: vec![fact("0", "2024-03-01", instant("2023-12-31"))],
+            next_cursor: Some("next".into()),
+        },
+        &|_| None,
+    )
+    .unwrap();
+    let mut r = receipt(&repo, run);
+    r.provenance.command = FetchCommand::Facts {
+        instance_id: "local".into(),
+        query: scope(),
+    };
+    r.provenance.runs[0].kind = RunKind::Financial;
+    let mut s = store(&dir.path().join("app.sqlite"), &fin);
+    let f = s.record_fetch(&r).unwrap();
+    assert_eq!(
+        s.create_dataset(&app_scope(), &f.id, all_facts_projection(run))
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    repo.finish_run(run, None).unwrap();
+    let d = s
+        .create_dataset(&app_scope(), &f.id, all_facts_projection(run))
+        .unwrap();
+    assert_eq!(
+        d.selected_run.unwrap().status,
+        lugus_financial::storage::RunStatus::Complete
+    );
+    assert!(d.limitations.iter().any(|s| s.contains("partial")));
+}

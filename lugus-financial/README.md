@@ -69,13 +69,18 @@ Opening a database applies migration 1 → 2 transactionally, adding market tabl
 
 ## Verification
 
+See the [data-fetch recovery report](../docs/data-fetch-recovery.md) for failure
+classification, bounded source retries, cooldowns, agent guidance and limitations.
+A completed upstream timeout/outage no longer closes a healthy plugin connection;
+actual protocol failures, host deadlines and cancellation still invalidate it.
+
 From the workspace:
 
 ```sh
 cargo test -p lugus-financial
 cargo clippy -p lugus-financial --all-targets -- -D warnings
 cargo fmt -p lugus-financial -- --check
-python3 -m unittest discover -s lugus-financial/plugins/sec-edgar/tests -v
+lugus-financial/plugins/sec-edgar/.venv/bin/python -m unittest discover -s lugus-financial/plugins/sec-edgar/tests -v
 python3 -m unittest discover -s lugus-financial/plugins/yfinance/tests -v
 ```
 

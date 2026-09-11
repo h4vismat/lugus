@@ -1,1 +1,7 @@
 /target/
+.gstack/
+
+.DS_STORE
+docs/superpowers
+.env
+.idea
