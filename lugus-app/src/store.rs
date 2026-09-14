@@ -7,6 +7,7 @@ mod evidence;
 mod freeze;
 mod passages;
 pub use passages::{PassageStore, PreparedText, TextPreparation, TextPreparationInput};
+mod portfolio;
 mod sqlite;
 mod views;
 use crate::*;
@@ -15,6 +16,19 @@ use lugus_financial::resolution::catalog::CatalogSelection;
 pub use sqlite::SqliteApplicationStore;
 
 pub trait ApplicationStore: Send {
+    fn portfolio_store(&self) -> Result<&dyn crate::portfolio::PortfolioStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "portfolio storage unavailable",
+        ))
+    }
+    fn portfolio_store_mut(&mut self) -> Result<&mut dyn crate::portfolio::PortfolioStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "portfolio storage unavailable",
+        ))
+    }
+
     fn passage_store(&self) -> Result<&dyn PassageStore> {
         Err(error(
             ErrorKind::Unsupported,

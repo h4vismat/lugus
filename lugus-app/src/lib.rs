@@ -37,3 +37,5 @@ pub mod conversations;
 
 pub mod passages;
 pub mod research;
+
+pub mod portfolio;

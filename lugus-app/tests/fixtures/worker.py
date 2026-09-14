@@ -1,4 +1,5 @@
 """Real protocol peer. Files signal response boundaries, release files unblock them."""
+import datetime
 import base64
 import json
 import os
@@ -75,6 +76,10 @@ for line in sys.stdin:
             if mode == 'apple_missing': result['issuer_name'] = None
         elif method == 'market_data.daily':
             result = {'items': [{'instrument': params['instrument'], 'date': '2024-01-02', 'open': '100', 'high': '102', 'low': '99', 'close': '101', 'volume': 123, 'adjusted_close': '100.5', 'currency': 'USD', 'exchange_timezone': 'America/New_York', 'price_basis': 'source_reported', 'precision': 'decimal_source', 'source_url': 'https://example.test/history', 'retrieved_at': '2026-09-09T00:00:00Z'}], 'next_cursor': None, 'coverage': {'first_date': '2024-01-02', 'last_date': '2024-01-02', 'completeness': 'unverified'}}
+            if mode == 'portfolio_current':
+                day = params['end']
+                result['items'][0].update(date=day, retrieved_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+                result['coverage'].update(first_date=day, last_date=day)
             if mode == 'market_repeated_date' and not cursor:
                 result['next_cursor'] = 'page-two'
         elif method == 'filings.document':

@@ -412,3 +412,17 @@ the generated sample's 32 KiB application output cap can constrain a large conte
 before the default context cap. `conversation_limits` in application config uses
 serde defaults and must match stored limits once configured; changing durable
 limits requires a future explicit migration.
+
+## Portfolios
+
+`Application` exposes typed portfolio commands, previews, overview and paged reads, audit history, explicit price refresh/cancellation/status, and snapshot creation. `lugus-portfolio` performs exact decimal replay and FIFO valuation. Revisions and monetary values cross JSON boundaries as strings. Commands require an expected revision and a caller-generated request ID; retries return the original receipt, while changed payloads or stale revisions conflict.
+
+SQLite migration 7 stores the current typed portfolio document and an immutable document plus command audit for every revision. An immediate transaction validates and replays the proposed state before publishing it. Voided event IDs remain reserved. Linked split corrections apply across affected accounts atomically. This document-per-revision model favors atomic, reproducible replay over normalized event queries; large edit histories consume additional disk space, and there is no history compaction yet.
+
+Price refresh is explicit and supervised (four concurrent jobs, 60-second deadline). It uses the existing provider/fetch/dataset pipeline and retains raw bars and provenance. The adapter currently recognizes bundled yfinance plugin 0.2.0 only, using its split-only Close and rejecting incompatible currencies, dates, bindings, later recorded splits or conflicting observations. Unknown providers remain unpriced. Failed refreshes retain previous usable observations with dated status information. Opening a portfolio never refreshes prices. A persisted running job without a local owner reads as `interrupted_or_external`; it is not automatically replayed. A new explicit refresh uses a new request ID.
+
+Snapshots freeze the selected portfolio/account, revision, valuation, price receipts, lots, matches and transactions. They belong to a conversation and are readable by agent tools only when explicitly selected for the current run. A selected portfolio without a company hint uses the offline evidence path; adding a company hint retains company research. Tools cannot mutate portfolios.
+
+Budgets are enforced: 100 accounts and 1,000 instruments per portfolio, 1,000 opening lots and 100,000 events per account, 1 MiB commands and 16 MiB documents/snapshots. Snapshot headers must also fit the configured selected-context/output budget; oversized selections fail explicitly, so select an account to narrow them. Native pages shrink to fit the response budget; an individual oversized row still fails. These are upper storage bounds, not a guarantee that every maximum-sized portfolio fits every UI or agent context.
+
+Portfolio integration tests are in `tests/portfolio_store.rs`, `portfolio_prices.rs` and `portfolio_conversations.rs`. They cover atomic replay, corrections, idempotency, restart persistence, provider refresh through saved valuation, cancellation, immutable snapshots and selected-run authorization.

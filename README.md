@@ -6,6 +6,7 @@ Lugus is a financial research application that combines agent-assisted chat, com
 
 ## What it does
 
+- Tracks USD stock, ETF and cash portfolios from transactions or opening lots, with FIFO P&L and explicit price refresh.
 - Accepts research requests in chat, with an optional company or ticker hint.
 - Resolves company identities and retrieves evidence through configured data providers.
 - Displays saved historical price charts and reported financial metrics alongside conversations.
@@ -21,6 +22,7 @@ Agent configuration and financial data providers are separate: an authenticated 
 | --- | --- |
 | [lugus-desktop](lugus-desktop/README.md) | Tauri desktop shell and TypeScript research interface. |
 | [lugus-app](lugus-app/README.md) | Framework-independent application host, research preparation, durable conversations, evidence, and views. |
+| [lugus-portfolio](lugus-portfolio/README.md) | Exact decimal accounting, FIFO lots, transaction replay and valuation. |
 | [lugus-agent](lugus-agent/README.md) | Agent runtime adapters, tool execution boundaries, and investment review workflows. |
 | [lugus-financial](lugus-financial/README.md) | Financial domain types, provider capabilities, ingestion, provenance, and SQLite persistence. |
 

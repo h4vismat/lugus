@@ -37,7 +37,14 @@ pub(super) async fn execute(
 ) -> ExecutionResult {
     let deadline = tokio::time::Instant::now() + options.run_limits.timeout;
     let mut injected = String::new();
-    let evidence_only = interpreter.is_some();
+    let portfolio_only = run.company_hint.is_none()
+        && run
+            .input
+            .references
+            .iter()
+            .any(|r| matches!(r.reference, SelectedReference::Portfolio { .. }));
+    let evidence_only = interpreter.is_some() || portfolio_only;
+    let interpreter = if portfolio_only { None } else { interpreter };
     if let Some(interpreter) = interpreter {
         let preparation = super::preparation::prepare(
             &app,

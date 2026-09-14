@@ -10,6 +10,23 @@ impl SqliteApplicationStore {
         let limits = &self.conversation_limits;
         let max = limits.selected_bytes.min(self.limits.max_output_bytes);
         match selected {
+            SelectedReference::Portfolio { id } => {
+                let conversation: String = self
+                    .connection
+                    .query_row(
+                        "SELECT id FROM conversations WHERE workspace=?1",
+                        [&scope.workspace_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(storage)?;
+                let snapshot = crate::portfolio::PortfolioStore::portfolio_read_snapshot(
+                    self,
+                    &conversation,
+                    id,
+                )?;
+                FrozenReference::from_portfolio(&snapshot, limits)
+            }
+
             SelectedReference::Passage { id } => FrozenReference::from_passage(
                 &crate::PassageStore::read_passage(self, scope, id, max)?,
                 limits,

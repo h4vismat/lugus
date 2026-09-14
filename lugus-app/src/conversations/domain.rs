@@ -113,6 +113,7 @@ pub struct WorkspaceState {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SelectedReference {
+    Portfolio { id: String },
     Dataset { id: String },
     View { id: String },
     Binding { id: String },
@@ -122,7 +123,8 @@ pub enum SelectedReference {
 impl SelectedReference {
     pub fn id(&self) -> &str {
         match self {
-            Self::Dataset { id }
+            Self::Portfolio { id }
+            | Self::Dataset { id }
             | Self::View { id }
             | Self::Binding { id }
             | Self::Passage { id } => id,

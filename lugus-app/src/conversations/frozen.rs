@@ -39,6 +39,20 @@ pub struct FrozenView {
 }
 
 impl FrozenReference {
+    pub fn from_portfolio(
+        snapshot: &crate::portfolio::PortfolioSnapshot,
+        limits: &ConversationLimits,
+    ) -> Result<Self> {
+        validate_id(&snapshot.id)?;
+        Self::freeze(
+            SelectedReference::Portfolio {
+                id: snapshot.id.clone(),
+            },
+            snapshot,
+            limits,
+        )
+    }
+
     /// Freeze only a passage obtained from a scoped trusted store read.
     pub fn from_passage(
         passage: &crate::passages::Passage,
@@ -132,6 +146,12 @@ impl FrozenReference {
             return Err(invalid("frozen reference integrity check failed"));
         }
         let payload_id = match &self.reference {
+            SelectedReference::Portfolio { .. } => {
+                let snapshot: crate::portfolio::PortfolioSnapshot =
+                    decode_frozen(&self.serialized, limits.selected_bytes)?;
+                snapshot.id
+            }
+
             SelectedReference::Passage { .. } => {
                 let payload: crate::passages::Passage =
                     decode_frozen(&self.serialized, limits.selected_bytes)?;

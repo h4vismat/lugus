@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 mod bindings;
 mod passages;
+mod portfolio;
 mod price_chart;
 
 pub struct ResearchExecutor {
@@ -32,6 +33,7 @@ impl ResearchExecutor {
         specs.extend(cached_tool_specs(application.limits()));
         specs.extend(bindings::tool_specs(application.limits(), &offering));
         specs.extend(passages::tool_specs(&application));
+        specs.extend(portfolio::tool_specs());
         let output_bytes = application.limits().max_output_bytes;
         Ok(Self {
             output_bytes,
@@ -59,6 +61,8 @@ impl ResearchExecutor {
     /// Explicit allowlist: the analysis model cannot invoke hidden fetch or binding effects.
     pub(crate) fn restrict_to_evidence(&mut self) {
         const OFFLINE: &[&str] = &[
+            "lugus_read_portfolio_snapshot",
+            "lugus_read_portfolio_snapshot_page",
             "lugus_read_fetch",
             "lugus_dataset_header",
             "lugus_read_dataset",
@@ -86,6 +90,9 @@ impl ResearchExecutor {
                 "tool was not offered for this turn",
                 false,
             ));
+        }
+        if portfolio::NAMES.contains(&call.name.as_str()) {
+            return self.portfolio_call(&scope, call).await;
         }
         if call.name == price_chart::NAME {
             return self.price_chart_call(&scope, call).await;

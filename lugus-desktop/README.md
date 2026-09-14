@@ -161,3 +161,28 @@ The agent can call `get_price_chart({symbol: "PLTR", start: "2024-01-01", end: "
 The bundled adapter currently supports yfinance 0.2.0 and supplies `yahoo:symbol` internally. The public tool has no provider-specific fields. Multiple eligible providers produce an ambiguity error rather than choosing arbitrarily. A symbol chart does not establish a company binding or join fundamentals by ticker; the explicit binding workflow remains available for company-associated evidence. Failed/cancelled retrieval does not open a successful chart.
 
 Statement categorization uses an offline, replaceable concept map extracted from EdgarTools 5.57.0 (`gaap_mappings.json`, confidence at least 0.8), with its MIT notice under `public/licenses`. Only exact US GAAP concepts are mapped; uncertain and other-taxonomy metrics stay in Other Metrics. These categories do not reproduce the filing presentation or duplicate shared line items across statements. Refresh the map using `python3 scripts/update-statement-mappings.py` after installing the pinned SEC plugin environment.
+
+## Portfolio
+
+Open **Portfolio** in the sidebar, create a portfolio, and add stocks or ETFs under **Accounts**. All accounts and instruments use USD.
+
+- Choose **Full history** to enter deposits, purchases, sales and other activity from the start. Record the funding deposit before a purchase.
+- Choose an existing account to enter opening cash and each remaining purchase lot with its original date, remaining quantity and total remaining cost basis including fees. Mark simplified lots or unknown dates explicitly; these assumptions remain visible.
+- **Add transaction** supports buys, sells, deposits, withdrawals, dividends, fees and splits. Preview calculations before saving. **Transactions** provides corrections and voids; **Audit** preserves the command history. Split corrections cover the linked accounts together.
+- **Overview** shows cash, FIFO realized P&L, unrealized P&L, income and fees. **Holdings** expands to remaining lots. Choose one account or the whole portfolio. Missing prices produce an incomplete subtotal rather than a zero-priced holding.
+- Connect an instrument to a configured price source under **Accounts**, then choose **Refresh prices**. The current valuation adapter supports bundled yfinance 0.2.0. Values display observation dates, and older saved observations remain usable offline. Refresh does not update automatically; its cancellation button stops the current job.
+- **Use in chat** creates a frozen snapshot and shows a sharing indicator. The next message shares that selection with the configured agent. Without a company hint, the agent analyzes saved portfolio evidence; with a hint, it can combine that snapshot with company research. Later edits require a new snapshot.
+
+Accounting uses decimal strings; amounts display rounded to cents. FIFO is per account. Dividends and standalone fees are shown separately from trading P&L. CSV import, broker synchronization, FX, shorts, margin, tax reports and historical performance charts are outside this version. Desktop list views currently cap at 10,000 rows; select an account to narrow large portfolios. Large snapshot headers or individual rows can exceed configured context/transport budgets and are rejected explicitly.
+
+### Portfolio browser check
+
+The browser test drives the built UI against a real offline native bridge and disposable SQLite databases. It verifies both setup paths, FIFO results, holdings and snapshot selection. It does not call a live market provider or agent.
+
+```sh
+npm run build
+cargo build --manifest-path src-tauri/Cargo.toml --example portfolio_qa
+node tests/portfolio-browser.cjs
+```
+
+Install Playwright and its Chromium browser in your test environment first. `LUGUS_PLAYWRIGHT_MODULE` may point to an existing Playwright module; `LUGUS_CHROMIUM` optionally selects a Chromium executable. The test prints the temporary directory containing screenshots and databases. Native bridge tests also run with `cargo test --manifest-path src-tauri/Cargo.toml --tests`.

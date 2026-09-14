@@ -79,7 +79,7 @@ impl Validate for PriceCoverage {
         )
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceBar {
     pub instrument: InstrumentId,
     pub date: NaiveDate,

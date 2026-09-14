@@ -1,4 +1,5 @@
 //! Bounded native transport over the persisted application and conversation ports.
+mod portfolio;
 mod runtime;
 mod settings;
 use lugus_app::{conversations::*, *};
@@ -18,6 +19,9 @@ struct DesktopConfig {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    Portfolio {
+        command: portfolio::Command,
+    },
     Info,
     AgentSettings,
     SelectAgent {
@@ -240,6 +244,7 @@ impl Bridge {
             .map_err(|_| error(ErrorKind::InvalidInput, "invalid desktop command"))?;
         let app = self.host.application();
         let response = match command {
+            Command::Portfolio { command } => portfolio::dispatch(app, command).await?,
             Command::Info => match &self.settings {
                 Some(settings) => {
                     let view = settings.view();

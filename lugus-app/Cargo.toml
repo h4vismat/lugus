@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lugus-portfolio = { path = "../lugus-portfolio" }
 lugus-agent = { path = "../lugus-agent" }
 sha2 = "0.10"
 getrandom = "0.4.3"

@@ -3,6 +3,7 @@ use crate::*;
 mod bindings;
 mod conversations;
 mod passages;
+mod portfolio;
 pub use bindings::BoundPriceRequest;
 pub use passages::TextPreparationOptions;
 use serde::{Deserialize, Serialize};
@@ -109,6 +110,7 @@ struct RegisteredJob {
     status: watch::Sender<JobStatus>,
 }
 struct Admission {
+    refreshes: BTreeMap<String, portfolio::PortfolioJob>,
     closed: bool,
     preparations: BTreeMap<u64, passages::PreparationJob>,
     next_preparation: u64,
@@ -214,6 +216,7 @@ impl Application {
             inner: Arc::new(Inner {
                 catalog: Arc::new(Mutex::new(catalog)),
                 admission: Mutex::new(Admission {
+                    refreshes: BTreeMap::new(),
                     closed: false,
                     preparations: BTreeMap::new(),
                     next_preparation: 0,
@@ -654,6 +657,10 @@ impl Application {
                         job.cancel();
                         job.done.clone()
                     })
+                    .chain(state.refreshes.values().map(|job| {
+                        job.cancel.send_replace(true);
+                        job.done.clone()
+                    }))
                     .collect();
                 let (sender, completion) = watch::channel(None);
                 state.shutdown = Some(completion.clone());

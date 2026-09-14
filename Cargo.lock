@@ -472,6 +472,7 @@ dependencies = [
  "html5ever",
  "lugus-agent",
  "lugus-financial",
+ "lugus-portfolio",
  "rusqlite",
  "serde",
  "serde_json",
@@ -496,6 +497,18 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "lugus-portfolio"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -559,6 +572,25 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "num-traits"

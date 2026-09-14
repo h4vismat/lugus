@@ -1,3 +1,6 @@
+import {mountPortfolio} from './portfolio/panel';
+import {createPortfolioApi} from './portfolio/api';
+import type {Snapshot as PortfolioSnapshot} from './portfolio/types';
 import {readSavedWindow,readSavedFacts} from './data';
 import {invoke} from '@tauri-apps/api/core';
 import {byId,element,markdown} from './dom';
@@ -13,13 +16,14 @@ let chats:Conversation[]=[];let nextChats:number|null=0;
 let receipts:View[]=[];let panelIssues:string[]=[];let researchLoad=0;
 let messages:Message[]=[];let workspace:Workspace|null=null;let research:ResearchView[]=[];
 let currentRun:Run|null=null;let runtimeAvailable=false;let infoReady=false;let submitting=false;
+let portfolioContext:{id:string;conversation:string;date:string}|null=null;
 let includeContext=true;let activeTab:ResearchTab='overview';let range='ALL';let layoutRevision='';
 const monitors=new Map<string,{run:Run;text:string;activity:string;offset:number}>();
 const drafts=new Map<string,string>();
 const companyHints=new Map<string,string>();
 const messageContainer=byId('messages');const emptyMessage=messageContainer.innerHTML;
 const emptyResearch=byId('research-content').innerHTML;
-let retrySubmission:{conversation:string;request:string;text:string;company_hint:string|null;selected:{kind:'view';id:string}[]}|null=null;
+let retrySubmission:{conversation:string;request:string;text:string;company_hint:string|null;selected:{kind:'view'|'portfolio';id:string}[]}|null=null;
 const terminal=(run:Run)=>['completed','failed','interrupted'].includes(run.status);
 const errorText=(error:unknown)=>typeof error==='object'&&error!==null&&'message' in error?String(error.message):String(error);
 function error(message:string){const node=byId('error');node.textContent=message;node.hidden=!message;}
@@ -103,8 +107,9 @@ async function sendMessage(event:Event){event.preventDefault();const input=byId<
  try{let conversation=origin.id;
   if(!conversation){const created=await rpc<Conversation>({operation:'create',request:crypto.randomUUID(),title:Array.from(text.replace(/\s+/g,' ')).slice(0,72).join('')});conversation=created.id;chats.unshift(created);if(!acceptsResult(selection,origin))return;selection={id:conversation,generation:selection.generation+1};companyHints.set(conversation,byId<HTMLInputElement>('company-hint').value);companyHints.delete('new');renderChats();}
   const submissionOrigin={...selection};
-  const chosen=includeContext&&workspace?.selected_view_id?[{kind:'view' as const,id:workspace.selected_view_id}]:[];
-  const submission=retrySubmission?.conversation===conversation&&retrySubmission.text===text&&retrySubmission.company_hint===company_hint?retrySubmission:{conversation,request:crypto.randomUUID(),text,company_hint,selected:chosen};retrySubmission=submission;
+  const chosen:{kind:'view'|'portfolio';id:string}[]=includeContext&&workspace?.selected_view_id?[{kind:'view',id:workspace.selected_view_id}]:[];
+  if(portfolioContext?.conversation===conversation)chosen.push({kind:'portfolio',id:portfolioContext.id});
+  const submission=retrySubmission?.conversation===conversation&&retrySubmission.text===text&&retrySubmission.company_hint===company_hint&&JSON.stringify(retrySubmission.selected)===JSON.stringify(chosen)?retrySubmission:{conversation,request:crypto.randomUUID(),text,company_hint,selected:chosen};retrySubmission=submission;
   const run=await rpc<Run>({operation:'send',...submission});retrySubmission=null;
   if(acceptsResult(selection,submissionOrigin)){if(input.value===submittedDraft){input.value='';drafts.delete(conversation);if(origin.id===null)drafts.delete('new');}currentRun=run;await loadMessages({...selection});messageContainer.scrollTop=messageContainer.scrollHeight;updateControls();}
   if(!terminal(run))startMonitor(run,conversation);await loadChats();
@@ -134,3 +139,20 @@ async function initialize(){
  await loadChats();let last:string|null=null;try{last=localStorage.getItem('lugus:last-chat');}catch{}let chat=chats.find(c=>c.id===last);if(!chat&&last){try{chat=await rpc<Conversation>({operation:'conversation',conversation:last});chats.push(chat);renderChats();}catch{}}chat??=chats[0];if(chat)await openChat(chat);else wireSuggestions();updateControls();
 }
 initialize().catch(e=>{error(errorText(e));byId('connection').textContent='Connection unavailable';byId('settings-detail').textContent=errorText(e);});
+
+const portfolioApi=createPortfolioApi(rpc);
+const portfolioPanel=mountPortfolio(byId('portfolio'),portfolioApi,async(view,accountId)=>{
+ let conversation=selection.id;
+ if(!conversation){const created=await rpc<Conversation>({operation:'create',request:crypto.randomUUID(),title:'Portfolio review'});chats.unshift(created);renderChats();await openChat(created);conversation=created.id;}
+ const snapshot=await portfolioApi<PortfolioSnapshot>({kind:'snapshot',request:{request_id:crypto.randomUUID(),portfolio_id:view.id,account_id:accountId,expected_revision:view.revision,conversation_id:conversation}});
+ portfolioContext={id:snapshot.id,conversation,date:snapshot.summary.as_of};portfolioPanel.hide();
+ byId<HTMLInputElement>('company-hint').value='';renderPortfolioContext();byId<HTMLTextAreaElement>('message-input').focus();
+});
+function renderPortfolioContext(){
+ let context=document.getElementById('portfolio-context');if(!context){context=document.createElement('div');context.id='portfolio-context';byId('composer').prepend(context);}
+ context.replaceChildren();context.hidden=!portfolioContext||portfolioContext.conversation!==selection.id;
+ if(!context.hidden&&portfolioContext){context.append(element('span',`Portfolio snapshot as of ${portfolioContext.date} will be shared with the selected agent. Add a company hint for company research.`));const remove=element('button','Remove portfolio');remove.type='button';remove.onclick=()=>{portfolioContext=null;retrySubmission=null;renderPortfolioContext();};context.append(remove);}
+}
+byId('open-portfolio').onclick=()=>portfolioPanel.show();
+byId('chats').addEventListener('click',()=>{portfolioPanel.hide();portfolioContext=null;renderPortfolioContext();});
+byId('new-chat').addEventListener('click',()=>{portfolioPanel.hide();portfolioContext=null;renderPortfolioContext();});
