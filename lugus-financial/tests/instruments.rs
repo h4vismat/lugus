@@ -286,7 +286,7 @@ fn version_four_migrates_without_rewriting_old_evidence() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         db.query_row("SELECT identity FROM providers WHERE id='old'", [], |r| {

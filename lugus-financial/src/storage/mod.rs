@@ -1,6 +1,7 @@
 //! SQLite evidence history. Each page and its continuation cursor commit together.
 pub mod bounded;
 mod bounded_resolution;
+pub mod history;
 pub mod instruments;
 mod reference_reads;
 pub mod selection;
@@ -131,7 +132,7 @@ impl SqliteRepository {
                 transaction.execute_batch(include_str!("market-v2.sql"))?;
             }
             1 => transaction.execute_batch(include_str!("market-v2.sql"))?,
-            2..=5 => {}
+            2..=6 => {}
             _ => {
                 return Err(Error::new(
                     ErrorKind::Persistence,
@@ -147,6 +148,9 @@ impl SqliteRepository {
         }
         if version < 5 {
             transaction.execute_batch(include_str!("instruments-v5.sql"))?;
+        }
+        if version < 6 {
+            transaction.execute_batch(include_str!("historical-v6.sql"))?;
         }
         transaction.commit()?;
         Ok(Self { connection })

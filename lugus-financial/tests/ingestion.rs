@@ -274,7 +274,7 @@ fn future_schema_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db.sqlite");
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("PRAGMA user_version = 6;").unwrap();
+    conn.execute_batch("PRAGMA user_version = 7;").unwrap();
     assert!(matches!(
         SqliteRepository::open(path),
         Err(Error {

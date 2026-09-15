@@ -1,4 +1,5 @@
 //! Explicit provider refresh; repository snapshots are always offline.
+pub mod history;
 use crate::{
     capabilities::*,
     domain::*,

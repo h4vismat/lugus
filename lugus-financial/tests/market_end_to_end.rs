@@ -80,7 +80,7 @@ async fn real_yfinance_protocol_initializes_without_library_or_network() {
     let mut plugin = Plugin::start(
         Manifest {
             id: "yfinance".into(),
-            version: "0.2.0".into(),
+            version: "0.3.0".into(),
             protocol_version: 1,
             command: "python3".into(),
             args: vec!["main.py".into()],
@@ -94,6 +94,6 @@ async fn real_yfinance_protocol_initializes_without_library_or_network() {
     .unwrap();
     assert_eq!(plugin.capabilities().get("market_data"), Some(&1));
     assert_eq!(plugin.capabilities().get("instrument_lookup"), Some(&1));
-    assert_eq!(plugin.capabilities().len(), 2);
+    assert_eq!(plugin.capabilities().len(), 3);
     plugin.close().await.unwrap();
 }
