@@ -49,4 +49,4 @@ The existing `portfolio_qa` example and managed-worker fixture were extended ins
 - Saved results keep their original revision/date. Offline mode can display saved ranges, but cannot fetch an uncached range.
 - The live check demonstrates compatibility on this date, not upstream completeness or future availability.
 
-Integration into `main` is pending the user's branch-integration choice; the implementation worktree is preserved.
+Merged locally into `main` by fast-forward to `3c50eac` after the user requested local integration. Post-merge native tests (18), frontend tests (30), production build and provider tests (37) passed. The first parallel workspace run encountered four `Text file busy` errors launching temporary Codex test fixtures; the focused reproduction passed, and `cargo test --workspace --quiet -- --test-threads=1` passed all 507 tests. Formatting and diff checks passed. The feature worktree and branch can now be cleaned up. Nothing was pushed.
