@@ -156,6 +156,10 @@ pub struct AccountSummary {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortfolioView {
+    #[serde(default)]
+    pub benchmark_instance_id: Option<String>,
+    #[serde(default)]
+    pub dashboard: Option<super::DashboardMetrics>,
     pub id: String,
     pub name: String,
     #[serde(with = "revision")]

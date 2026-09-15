@@ -18,7 +18,16 @@ pub async fn ingest_history<R: HistoryRepository + ?Sized, P: HistoricalPricesPr
             let page = provider.fetch_history(&query).await?;
             page.validate_for(&query)?;
             let next = super::next_cursor(page.next_cursor.clone(), &mut seen)?;
-            repo.save_history_page(run, &page)?;
+            repo.save_history_page(run, &page).map_err(|error| {
+                if error.kind == crate::error::ErrorKind::InvalidRequest {
+                    crate::error::Error::new(
+                        crate::error::ErrorKind::Protocol,
+                        "historical page violates the immutable snapshot contract",
+                    )
+                } else {
+                    error
+                }
+            })?;
             query.cursor = next;
             if query.cursor.is_none() {
                 return Ok(());

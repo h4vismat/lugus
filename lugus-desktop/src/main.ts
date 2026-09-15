@@ -131,7 +131,7 @@ wireAgentSettings(rpc,value=>{
 });
 async function initialize(){
  try{panelWidth(Number(localStorage.getItem('lugus:research-width'))||410);}catch{}
- const info=await rpc<{offline:boolean;runtime_available:boolean;agent?:string;startup_error?:string}>({operation:'info'});runtimeAvailable=info.runtime_available;infoReady=true;
+ const info=await rpc<{offline:boolean;runtime_available:boolean;agent?:string;startup_error?:string}>({operation:'info'});runtimeAvailable=info.runtime_available;infoReady=true;portfolioPanel.setOnline(!info.offline);
  byId('connection').textContent=info.offline?'Offline':runtimeAvailable?(info.agent==='claude_code'?'Claude Code ready':info.agent==='codex'?'Codex ready':'Agent ready'):'Agent not configured';
  byId('settings-runtime').textContent=runtimeAvailable?'Agent runtime configured. A fresh session starts when you send a message.':'Agent runtime is not configured. Saved conversations and research remain available.';
  byId('settings-detail').textContent='Select Codex or Claude Code in Settings. Each uses its own existing sign-in.';
@@ -141,12 +141,17 @@ async function initialize(){
 initialize().catch(e=>{error(errorText(e));byId('connection').textContent='Connection unavailable';byId('settings-detail').textContent=errorText(e);});
 
 const portfolioApi=createPortfolioApi(rpc);
-const portfolioPanel=mountPortfolio(byId('portfolio'),portfolioApi,async(view,accountId)=>{
- let conversation=selection.id;
+const portfolioPanel=mountPortfolio(byId('portfolio'),portfolioApi,async(view,accountId,intent)=>{
+ let conversation=selection.id;const previousDraft=byId<HTMLTextAreaElement>('message-input').value;
  if(!conversation){const created=await rpc<Conversation>({operation:'create',request:crypto.randomUUID(),title:'Portfolio review'});chats.unshift(created);renderChats();await openChat(created);conversation=created.id;}
  const snapshot=await portfolioApi<PortfolioSnapshot>({kind:'snapshot',request:{request_id:crypto.randomUUID(),portfolio_id:view.id,account_id:accountId,expected_revision:view.revision,conversation_id:conversation}});
+ if(selection.id!==conversation)throw new Error('The selected conversation changed. Choose Research again.');
  portfolioContext={id:snapshot.id,conversation,date:snapshot.summary.as_of};portfolioPanel.hide();
- byId<HTMLInputElement>('company-hint').value='';renderPortfolioContext();byId<HTMLTextAreaElement>('message-input').focus();
+ const input=byId<HTMLTextAreaElement>('message-input'),hint=byId<HTMLInputElement>('company-hint');
+ if(intent){const existing=input.value||previousDraft;const question=`Review ${intent.name} (${intent.symbol}) in the context of my selected portfolio${accountId?' account':''}. What should I understand about this holding's risks and role?`;input.value=existing?`${existing}
+
+${question}`:question;hint.value=intent.symbol;drafts.set(conversation,input.value);companyHints.set(conversation,hint.value);}else{hint.value='';companyHints.set(conversation,'');}
+ retrySubmission=null;renderPortfolioContext();input.focus();
 });
 function renderPortfolioContext(){
  let context=document.getElementById('portfolio-context');if(!context){context=document.createElement('div');context.id='portfolio-context';byId('composer').prepend(context);}

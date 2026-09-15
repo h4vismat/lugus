@@ -79,7 +79,9 @@ pub(crate) fn view(
             .map_err(engine)
     };
     let accounts=doc.accounts.iter().filter(|a|account.is_none_or(|id|id==a.id)).map(|a|AccountSummary{id:a.id.clone(),name:a.name.clone(),start:a.ledger.start,revision:a.revision,simplified:matches!(&a.ledger.opening,Opening::Existing{lots,..} if lots.iter().any(|l|l.simplified))}).collect();
-    Ok(PortfolioView {
+    let mut result=PortfolioView {
+        dashboard: None,
+        benchmark_instance_id: doc.benchmark_instance_id.clone(),
         id: doc.header.id.clone(),
         name: doc.header.name.clone(),
         revision: doc.header.revision,
@@ -94,7 +96,9 @@ pub(crate) fn view(
         deposits: sum(|s| &s.deposits)?,
         withdrawals: sum(|s| &s.withdrawals)?,
         price_status: vec![],
-    })
+    };
+    result.dashboard = Some(dashboard_metrics(&result)?);
+    Ok(result)
 }
 impl PortfolioStore for SqliteApplicationStore {
     fn portfolio_history_request(

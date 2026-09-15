@@ -164,9 +164,7 @@ impl Settings {
             .cloned()
             .ok_or_else(|| failure("Select an installed agent in Settings to start chatting"))
     }
-    pub fn has_profiles(&self) -> bool {
-        self.state().profiles.values().any(|p| p.is_ok())
-    }
+
     pub fn options(&self) -> ConversationOptions {
         let mut options = ConversationOptions::default();
         options.run_limits.timeout = std::time::Duration::from_secs(

@@ -171,11 +171,15 @@ impl HistoryRepository for SqliteRepository {
         drop(stmt);
         let next_offset = (offset + items.len() < header.row_count).then_some(offset + items.len());
         tx.commit()?;
-        Ok(HistoryReadPage {
+        let page = HistoryReadPage {
             run: header,
             items,
             next_offset,
-        })
+        };
+        if serde_json::to_vec(&page).map_err(Error::from)?.len() > limits.max_bytes {
+            return Err(BoundedReadError::LimitExceeded);
+        }
+        Ok(page)
     }
 }
 fn read_run(
@@ -200,7 +204,7 @@ fn read_run(
             return Err(Error::new(ErrorKind::Persistence, "invalid historical run status").into());
         }
     };
-    Ok(HistoryRun {
+    let run = HistoryRun {
         id,
         provider: p.clone(),
         query: serde_json::from_str(&q).map_err(Error::from)?,
@@ -211,5 +215,9 @@ fn read_run(
             .map_err(Error::from)?,
         row_count: usize::try_from(count).map_err(|_| invalid("invalid historical row count"))?,
         error,
-    })
+    };
+    if serde_json::to_vec(&run).map_err(Error::from)?.len() > max {
+        return Err(BoundedReadError::LimitExceeded);
+    }
+    Ok(run)
 }

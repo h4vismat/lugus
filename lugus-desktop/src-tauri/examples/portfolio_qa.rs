@@ -1,10 +1,11 @@
-//! Offline native bridge for deterministic renderer QA with a disposable config.
+//! Native bridge for deterministic renderer QA with a disposable config.
 use desktop_host::Bridge;
 use std::io::{self, BufRead, Write};
 #[tokio::main]
 async fn main() {
     let config = std::env::args().nth(1).expect("desktop config path");
-    let bridge = Bridge::open(std::path::Path::new(&config), true)
+    let offline = !std::env::args().any(|arg| arg == "--online");
+    let bridge = Bridge::open(std::path::Path::new(&config), offline)
         .await
         .expect("open disposable QA config");
     for line in io::stdin().lock().lines() {

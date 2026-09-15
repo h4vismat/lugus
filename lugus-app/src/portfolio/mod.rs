@@ -1,7 +1,9 @@
 //! Durable user portfolio commands, read models and accounting boundaries.
+mod dashboard;
 mod history;
 mod history_lease;
 mod prices;
+pub use dashboard::*;
 pub use history::*;
 pub use history_lease::HistoryLease;
 mod types;

@@ -112,6 +112,10 @@ impl HistoryStatus {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEvidenceRef {
+    #[serde(default)]
+    pub manifest: Option<lugus_financial::historical_prices::HistoryManifest>,
+    #[serde(default)]
+    pub source_url: Option<String>,
     pub instrument_id: Option<String>,
     pub fetch_id: String,
     pub run_id: String,

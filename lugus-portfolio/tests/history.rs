@@ -110,3 +110,57 @@ fn split_chain_rounds_only_once_after_exact_ratio_product() {
         d("124.8075")
     );
 }
+#[test]
+fn dividend_cash_offsets_price_drop_and_fees_reduce_returns_once() {
+    let ledgers:Vec<Ledger>=serde_json::from_value(json!([{"account_id":"a","start":"2026-01-05","opening":{"kind":"full_history"},"events":[
+        {"id":"deposit","date":"2026-01-05","order":0,"kind":{"kind":"deposit","amount":"100"}},
+        {"id":"buy","date":"2026-01-05","order":1,"kind":{"kind":"buy","instrument_id":"x","quantity":"1","price":"100","gross":"100","fees":"0","gross_overridden":false}},
+        {"id":"dividend","date":"2026-01-06","order":0,"kind":{"kind":"dividend","instrument_id":"x","amount":"5"}},
+        {"id":"fee","date":"2026-01-07","order":0,"kind":{"kind":"fee","amount":"1"}}
+    ]}])).unwrap();
+    let closes:Vec<HistoricalClose>=serde_json::from_value(json!([
+        {"instrument_id":"x","date":"2026-01-05","session_close":"2026-01-05T21:00:00Z","close":"100","split":null,"observation_id":"1","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-06","session_close":"2026-01-06T21:00:00Z","close":"95","split":null,"observation_id":"2","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-07","session_close":"2026-01-07T21:00:00Z","close":"95","split":null,"observation_id":"3","unsupported_action":null}
+    ])).unwrap();
+    let days = historical_values(&ValuationHistoryInput {
+        ledgers: &ledgers,
+        closes: &closes,
+        benchmark: &[],
+        baseline: "2026-01-05".parse().unwrap(),
+        end: "2026-01-07".parse().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(days[1].value, Some(d("100")));
+    assert_eq!(days[1].deposits, Some(d("0")));
+    let returns = calculate_performance(&days).unwrap();
+    assert_eq!(returns.points[1].portfolio_return_percent, Some(d("0")));
+    assert_eq!(returns.summary.portfolio_return_percent, Some(d("-1")));
+}
+#[test]
+fn later_source_split_does_not_invalidate_a_fully_sold_position() {
+    let ledgers:Vec<Ledger>=serde_json::from_value(json!([{"account_id":"a","start":"2026-01-05","opening":{"kind":"existing","cash":"0","lots":[{"id":"l","instrument_id":"x","acquired":"2020-01-01","tie_order":0,"quantity":"1","basis":"50","simplified":false,"date_assumed":false}]},"events":[{"id":"sell","date":"2026-01-06","order":0,"kind":{"kind":"sell","instrument_id":"x","quantity":"1","price":"100","gross":"100","fees":"0","gross_overridden":false}}]}])).unwrap();
+    let closes:Vec<HistoricalClose>=serde_json::from_value(json!([
+        {"instrument_id":"x","date":"2026-01-05","session_close":"2026-01-05T21:00:00Z","close":"100","split":null,"observation_id":"1","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-06","session_close":"2026-01-06T21:00:00Z","close":"100","split":null,"observation_id":"2","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-07","session_close":"2026-01-07T21:00:00Z","close":"50","split":[2,1],"observation_id":"3","unsupported_action":null}
+    ])).unwrap();
+    let days = historical_values(&ValuationHistoryInput {
+        ledgers: &ledgers,
+        closes: &closes,
+        benchmark: &[],
+        baseline: "2026-01-05".parse().unwrap(),
+        end: "2026-01-07".parse().unwrap(),
+    })
+    .unwrap();
+    assert!(
+        days.iter()
+            .all(|d| d.value == Some(Decimal::parse("100").unwrap()))
+    );
+    assert!(
+        !days[2]
+            .issues
+            .iter()
+            .any(|i| i.code == HistoryIssueCode::SplitMismatch)
+    );
+}

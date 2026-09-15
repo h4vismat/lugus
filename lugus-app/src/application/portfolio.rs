@@ -158,3 +158,34 @@ impl Application {
         })
     }
 }
+impl Application {
+    pub async fn portfolio_holding_rows(
+        &self,
+        id: String,
+        account: Option<String>,
+        instrument: String,
+        section: String,
+        page: PageRequest,
+        revision: u64,
+    ) -> Result<PortfolioPage<serde_json::Value>> {
+        if page.limit == 0 || page.limit > 200 || page.offset > 100_000 {
+            return Err(crate::portfolio::invalid("invalid holding page"));
+        }
+        self.portfolio_effect(move|s|{
+            let doc=s.portfolio_document(&id)?;
+            if doc.header.revision!=revision{return Err(error(ErrorKind::Conflict,"portfolio changed while opening holding"));}
+            if !doc.instruments.iter().any(|i|i.id==instrument) || account.as_ref().is_some_and(|id|!doc.accounts.iter().any(|a|&a.id==id)){return Err(error(ErrorKind::ScopeMismatch,"holding scope does not belong to portfolio"));}
+            let mut rows=vec![];
+            for a in doc.accounts.iter().filter(|a|account.as_ref().is_none_or(|id|&a.id==id)) {
+                match section.as_str() {
+                    "lots"=>{let state=lugus_portfolio::replay(&a.ledger,chrono::Utc::now().date_naive()).map_err(crate::portfolio::engine)?;for lot in state.lots.into_iter().filter(|l|l.instrument_id==instrument){rows.push(serde_json::json!({"account_id":a.id,"account_name":a.name,"lot":lot}));}},
+                    "transactions"=>{for event in a.ledger.events.iter().filter(|e|e.kind.instrument_id()==Some(instrument.as_str())){rows.push(serde_json::json!({"account_id":a.id,"account_name":a.name,"event":event}));}},
+                    _=>return Err(crate::portfolio::invalid("unknown holding detail section")),
+                }
+            }
+            if section=="transactions"{rows.sort_by(|a,b|b["event"]["date"].as_str().cmp(&a["event"]["date"].as_str()).then_with(||b["event"]["order"].as_u64().cmp(&a["event"]["order"].as_u64())).then_with(||a["account_id"].as_str().cmp(&b["account_id"].as_str())));}
+            let next_offset=(page.offset+page.limit<rows.len()).then_some(page.offset+page.limit);
+            Ok(PortfolioPage{items:rows.into_iter().skip(page.offset).take(page.limit).collect(),next_offset,revision})
+        }).await
+    }
+}

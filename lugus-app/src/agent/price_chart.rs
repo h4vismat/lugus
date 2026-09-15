@@ -19,7 +19,7 @@ fn native_namespace(identity: &ProviderIdentity) -> Option<&'static str> {
         identity.plugin_id.as_str(),
         identity.plugin_version.as_str(),
     ) {
-        ("yfinance", "0.2.0") => Some("yahoo:symbol"),
+        ("yfinance", "0.2.0" | "0.3.0") => Some("yahoo:symbol"),
         _ => None,
     }
 }

@@ -39,3 +39,27 @@ class HistoricalNormalizationTests(unittest.TestCase):
         for item in result['items']:
             self.assertEqual(item['source_close'],item['close'])
             self.assertEqual(item['factor_to_anchor'],'1')
+
+class HistoricalPaginationTests(unittest.TestCase):
+    def test_snapshot_cursor_does_not_refetch_and_query_changes_are_rejected(self):
+        from history import HistoricalProvider
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from types import SimpleNamespace
+        calls=[]
+        def fetch(symbol,options):
+            calls.append(options)
+            return ([{'Date':datetime(2026,1,2,tzinfo=ZoneInfo('America/New_York')),'Close':100.0,'Stock Splits':0.0}],
+                    {'symbol':symbol,'currency':'USD','exchangeTimezoneName':'America/New_York','exchangeName':'NYQ'})
+        provider=HistoricalProvider(fetch,lambda:'2026-01-05T22:00:00Z',SimpleNamespace(run=lambda fn:fn()))
+        query=dict(instrument=dict(namespace='yahoo:symbol',value='TEST'),start='2026-01-02',end='2026-01-05',anchor='2026-01-05',page_size=2,cursor=None)
+        first=provider.daily(query)
+        changed=dict(query,end='2026-01-02',cursor=first['next_cursor'])
+        with self.assertRaises(ProviderError): provider.daily(changed)
+        second=provider.daily(dict(query,cursor=first['next_cursor']))
+        self.assertEqual(first['manifest'],second['manifest'])
+        self.assertEqual(len(calls),1)
+        self.assertTrue(calls[0]['actions'])
+        self.assertFalse(calls[0]['auto_adjust'])
+        self.assertFalse(calls[0]['back_adjust'])
+        with self.assertRaises(ProviderError): provider.daily(dict(query,cursor=first['next_cursor']))

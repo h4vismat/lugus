@@ -1,4 +1,4 @@
-# Yfinance market data and instrument lookup plugin 0.2.0
+# Yfinance market data and instrument lookup plugin 0.3.0
 
 An independently installed Python adapter for Lugus protocol v1, `market_data: 1` and
 `instrument_lookup: 1`.

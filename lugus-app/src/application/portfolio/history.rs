@@ -165,9 +165,23 @@ impl Application {
                 result.error = Some(e.message);
             }
             let id = result.id.clone();
-            let _ = app
+            let mut failed = result.clone();
+            if let Err(error) = app
                 .portfolio_effect(move |s| s.portfolio_history_finish(&result))
-                .await;
+                .await
+            {
+                failed.status = HistoryStatus::Failed;
+                failed.error = Some(error.message);
+                failed.evidence.clear();
+                failed.issues.clear();
+                failed.row_count = 0;
+                failed.summary = Default::default();
+                failed.baseline = None;
+                failed.effective_end = None;
+                let _ = app
+                    .portfolio_effect(move |s| s.portfolio_history_finish(&failed))
+                    .await;
+            }
             done_sender.send_replace(true);
             if let Ok(mut admission) = lock(&app.inner.admission) {
                 admission.histories.remove(&id);
@@ -408,7 +422,9 @@ impl Application {
         let account = request.account_id.clone();
         let cancel = stop.clone();
         let computed = tokio::task::spawn_blocking(move || {
-            let owned = history_inputs(&doc, account.as_deref(), baseline, end, &bundles)?;
+            let owned = history_inputs(&doc, account.as_deref(), baseline, end, &bundles, &|| {
+                cancel.stopped()
+            })?;
             let days = historical_values_cancellable(
                 &ValuationHistoryInput {
                     ledgers: &owned.ledgers,
@@ -455,17 +471,45 @@ impl Application {
                 });
             }
         }
-        for (i, chunk) in series.points.chunks(200).enumerate() {
+        let mut offset = 0;
+        while offset < series.points.len() {
             stop.check()?;
+            let mut count = (series.points.len() - offset)
+                .min(200)
+                .min(self.inner.limits.max_read_page_items);
+            while crate::agent_contract::check_serialized_size(
+                &&series.points[offset..offset + count],
+                self.inner.limits.max_read_page_bytes,
+            )
+            .is_err()
+            {
+                if count <= 1 {
+                    return Err(error(
+                        ErrorKind::ResourceLimit,
+                        "historical row exceeds storage budget",
+                    ));
+                }
+                count = (count / 2).max(1);
+            }
             let id = result.id.clone();
-            let chunk = chunk.to_vec();
-            self.portfolio_effect(move |s| s.portfolio_history_save_rows(&id, i * 200, &chunk))
+            let chunk = series.points[offset..offset + count].to_vec();
+            self.portfolio_effect(move |s| s.portfolio_history_save_rows(&id, offset, &chunk))
                 .await?;
+            offset += count;
         }
         stop.check()?;
-        result.status = if result.summary.portfolio_return_percent.is_some()
+        result.status = if result.error.is_some()
+            && result.summary.portfolio_return_percent.is_none()
+            && result.summary.benchmark_return_percent.is_none()
+        {
+            HistoryStatus::Failed
+        } else if result.summary.portfolio_return_percent.is_some()
             && result.summary.benchmark_return_percent.is_some()
-            && result.issue_count == 0
+            && series
+                .points
+                .iter()
+                .flat_map(|p| &p.issues)
+                .all(|i| i.code == HistoryIssueCode::ZeroCapital && i.date == baseline)
             && result.error.is_none()
         {
             HistoryStatus::Complete
@@ -560,6 +604,8 @@ impl Application {
             .ok_or_else(|| crate::portfolio::invalid("history manifest missing"))?;
         Ok((
             HistoryEvidenceRef {
+                manifest: Some(manifest.clone()),
+                source_url: page.items.first().map(|r| r.day.source_url.clone()),
                 instrument_id,
                 fetch_id: id.to_owned(),
                 run_id: page.run.id.to_string(),

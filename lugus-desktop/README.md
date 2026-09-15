@@ -123,7 +123,7 @@ Provider processes run from their manifest directories. No provider credentials 
 
 ## Open saved research offline
 
-The runtime is optional. Omit it or set `"runtime": null` to open saved conversations and research without starting an agent or provider process. Alternatively, force offline mode for an existing configuration:
+The runtime is optional. Omit it or set `"runtime": null` to open saved conversations without starting an agent. Configured financial providers remain available for portfolio refresh. To disable provider processes too, force offline mode:
 
 ```sh
 LUGUS_CONFIG=/absolute/path/to/desktop.json LUGUS_OFFLINE=1 \
@@ -158,7 +158,7 @@ The desktop is an initial research surface, not completion of the wider product 
 
 The agent can call `get_price_chart({symbol: "PLTR", start: "2024-01-01", end: "2024-12-31"})`. The backend selects the single eligible active price provider, constructs its native identifier, retrieves bounded paginated daily closes, saves a dataset and accepts a price-chart view. The result includes `fetch_id`, `dataset_id`, `view_id`, row count and source coverage. Dates are inclusive; no automatic refresh is introduced.
 
-The bundled adapter currently supports yfinance 0.2.0 and supplies `yahoo:symbol` internally. The public tool has no provider-specific fields. Multiple eligible providers produce an ambiguity error rather than choosing arbitrarily. A symbol chart does not establish a company binding or join fundamentals by ticker; the explicit binding workflow remains available for company-associated evidence. Failed/cancelled retrieval does not open a successful chart.
+The bundled adapter currently supports yfinance 0.2.0 and 0.3.0 and supplies `yahoo:symbol` internally. The public tool has no provider-specific fields. Multiple eligible providers produce an ambiguity error rather than choosing arbitrarily. A symbol chart does not establish a company binding or join fundamentals by ticker; the explicit binding workflow remains available for company-associated evidence. Failed/cancelled retrieval does not open a successful chart.
 
 Statement categorization uses an offline, replaceable concept map extracted from EdgarTools 5.57.0 (`gaap_mappings.json`, confidence at least 0.8), with its MIT notice under `public/licenses`. Only exact US GAAP concepts are mapped; uncertain and other-taxonomy metrics stay in Other Metrics. These categories do not reproduce the filing presentation or duplicate shared line items across statements. Refresh the map using `python3 scripts/update-statement-mappings.py` after installing the pinned SEC plugin environment.
 
@@ -169,20 +169,26 @@ Open **Portfolio** in the sidebar, create a portfolio, and add stocks or ETFs un
 - Choose **Full history** to enter deposits, purchases, sales and other activity from the start. Record the funding deposit before a purchase.
 - Choose an existing account to enter opening cash and each remaining purchase lot with its original date, remaining quantity and total remaining cost basis including fees. Mark simplified lots or unknown dates explicitly; these assumptions remain visible.
 - **Add transaction** supports buys, sells, deposits, withdrawals, dividends, fees and splits. Preview calculations before saving. **Transactions** provides corrections and voids; **Audit** preserves the command history. Split corrections cover the linked accounts together.
-- **Overview** shows cash, FIFO realized P&L, unrealized P&L, income and fees. **Holdings** expands to remaining lots. Choose one account or the whole portfolio. Missing prices produce an incomplete subtotal rather than a zero-priced holding.
-- Connect an instrument to a configured price source under **Accounts**, then choose **Refresh prices**. The current valuation adapter supports bundled yfinance 0.2.0. Values display observation dates, and older saved observations remain usable offline. Refresh does not update automatically; its cancellation button stops the current job.
-- **Use in chat** creates a frozen snapshot and shows a sharing indicator. The next message shares that selection with the configured agent. Without a company hint, the agent analyzes saved portfolio evidence; with a hint, it can combine that snapshot with company research. Later edits require a new snapshot.
+- **Overview** shows current total, invested value and cash alongside selected-period returns. Switch the performance chart between percentage returns and dollar value, and choose 1M, 3M, YTD, 1Y or All. Changing the chart period does not change current holdings. Use the keyboard crosshair or paginated exact daily table to inspect values, external cash flows and gaps.
+- Allocation views group holdings or asset types and show largest/top-two concentration. Sort **Holdings** by value, weight, basis or unrealized P&L. Open a holding for paginated remaining lots and recent activity. Choose one account or the whole portfolio; missing prices leave incomplete metrics visibly unavailable.
+- **Accounting details** retains FIFO realized P&L, unrealized P&L, income and fees.
+- Connect an instrument to a configured price source under **Accounts**, then choose **Refresh prices** to refresh current quotes and history. Current quotes support yfinance 0.2.0/0.3.0; history requires 0.3.0 and its pinned calendar dependency. Portfolio data providers work without an agent profile. Saved charts and quotes remain available offline with their original dates and revision.
+- The fixed benchmark is the S&P 500 total-return index (`^SP500TR`), with no substitute price index or ETF. Exactly one compatible provider is selected automatically; with multiple providers choose the benchmark source under **Accounts**. Portfolio performance remains available when only the benchmark is missing. Methodology details list source identities, dates and links.
+- **Use in chat** creates a frozen snapshot and shows a sharing indicator. The next message shares that selection with the configured agent. Without a company hint, the agent analyzes saved portfolio evidence; with a hint, it can combine that snapshot with company research. Later edits require a new snapshot. **Research** in a holding drawer also prepares a company hint and question, preserving an unsent draft. It never sends a message automatically.
 
-Accounting uses decimal strings; amounts display rounded to cents. FIFO is per account. Dividends and standalone fees are shown separately from trading P&L. CSV import, broker synchronization, FX, shorts, margin, tax reports and historical performance charts are outside this version. Desktop list views currently cap at 10,000 rows; select an account to narrow large portfolios. Large snapshot headers or individual rows can exceed configured context/transport budgets and are rejected explicitly.
+Accounting uses decimal strings; summary amounts display rounded to cents and the daily data table preserves exact values. Historical returns adjust for external cash flows; existing accounts enter at setup-date market value. Missing prices or unreconciled splits produce explicit gaps. FIFO is per account. Dividends and standalone fees are shown separately from trading P&L. CSV import, broker synchronization, FX, shorts, margin, and tax reports are outside this version. Desktop list views currently cap at 10,000 rows; select an account to narrow large portfolios. History jobs allow one active job per portfolio, four globally, two concurrent source fetches per job, five minutes, 100 instruments and 100,000 source rows. Daily data and source evidence use bounded pages of at most 200 rows. Long histories may reach these limits. Large snapshot headers or individual rows can exceed configured context/transport budgets and are rejected explicitly.
 
 ### Portfolio browser check
 
-The browser test drives the built UI against a real offline native bridge and disposable SQLite databases. It verifies both setup paths, FIFO results, holdings and snapshot selection. It does not call a live market provider or agent.
+The browser test drives the built UI against a real offline native bridge and disposable SQLite databases. It verifies both setup paths, FIFO results, holdings and snapshot selection. The dashboard check additionally uses a deterministic provider fixture to cover chart interaction, sorting, drawer focus, responsive layout, preserved drafts, missing-session gaps, refresh and offline reopening. Neither check calls a live market provider or agent.
 
 ```sh
 npm run build
 cargo build --manifest-path src-tauri/Cargo.toml --example portfolio_qa
 node tests/portfolio-browser.cjs
+node tests/portfolio-dashboard-browser.cjs
 ```
 
 Install Playwright and its Chromium browser in your test environment first. `LUGUS_PLAYWRIGHT_MODULE` may point to an existing Playwright module; `LUGUS_CHROMIUM` optionally selects a Chromium executable. The test prints the temporary directory containing screenshots and databases. Native bridge tests also run with `cargo test --manifest-path src-tauri/Cargo.toml --tests`.
+
+For an opt-in live fetch/store/calculate/render check, install the bundled yfinance requirements into its `.venv`, build the same bundle and QA example, then run `node tests/portfolio-live-browser.cjs`. It creates a labelled synthetic AAPL opening account in disposable databases and saves its source receipts and screenshot. This check uses network data and is separate from deterministic tests.

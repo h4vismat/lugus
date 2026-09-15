@@ -112,3 +112,31 @@ async fn history_pages_obey_worker_budget() {
     );
     h.app.shutdown().await.unwrap();
 }
+#[tokio::test]
+async fn changing_snapshot_metadata_is_a_protocol_failure() {
+    let h = Harness::new(
+        &[("p", "history_changed_manifest")],
+        HostBounds::default(),
+        Limits::default(),
+    )
+    .await;
+    let scope = h.scope("changed");
+    let job = h.app.submit_manual(&scope, command()).unwrap();
+    let status = h.app.wait(&scope, &job.id).await.unwrap();
+    let fetch = h
+        .app
+        .read_fetch(&scope, status.fetch_id.as_ref().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(fetch.error.unwrap().kind, ErrorKind::Unavailable);
+    assert!(
+        !h.app
+            .providers()
+            .unwrap()
+            .iter()
+            .find(|p| p.identity.instance_id == "p")
+            .unwrap()
+            .available
+    );
+    h.app.shutdown().await.unwrap();
+}

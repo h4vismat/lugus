@@ -142,7 +142,7 @@ fn v4_migration_backfills_recency_without_changing_existing_records() {
     let sql = rusqlite::Connection::open(&path).unwrap();
     // Remove exactly the v5 additions to reconstruct the previous on-disk schema.
     sql.execute_batch(
-        "DROP TABLE portfolio_snapshot_rows; DROP TABLE portfolio_snapshots; DROP TABLE portfolio_prices; DROP TABLE portfolio_refreshes; DROP TABLE portfolio_history; DROP TABLE portfolio_requests; DROP TABLE portfolio_event_ids; DROP TABLE portfolios; DROP TABLE conversation_preparations;
+        "DROP TABLE portfolio_history_evidence; DROP TABLE portfolio_performance_days; DROP TABLE portfolio_history_jobs; DROP TABLE portfolio_snapshot_rows; DROP TABLE portfolio_snapshots; DROP TABLE portfolio_prices; DROP TABLE portfolio_refreshes; DROP TABLE portfolio_history; DROP TABLE portfolio_requests; DROP TABLE portfolio_event_ids; DROP TABLE portfolios; DROP TABLE conversation_preparations;
         DROP TRIGGER conversation_recency_create;
         DROP TRIGGER conversation_recency_message;
         DROP TABLE conversation_recency;
@@ -165,7 +165,7 @@ fn v4_migration_backfills_recency_without_changing_existing_records() {
     assert_eq!(
         sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
 }
 

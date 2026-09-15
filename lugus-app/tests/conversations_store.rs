@@ -503,7 +503,7 @@ fn v2_migration_keeps_raw_evidence_and_binding_rows() {
     assert_eq!(
         sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
     for (query, want) in [
         (

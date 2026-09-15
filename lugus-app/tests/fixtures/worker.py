@@ -1,5 +1,6 @@
 """Real protocol peer. Files signal response boundaries, release files unblock them."""
 import datetime
+from decimal import Decimal
 import base64
 import json
 import os
@@ -90,22 +91,33 @@ for line in sys.stdin:
                 rows.append(dict(date=day.isoformat(),market_close=close_at.isoformat() if close_at else None,
                     source_close='100' if completed else None,close='100' if completed else None,factor_to_anchor='1',
                     split=None,unsupported_action=None,source_url='https://example.com/history'))
+            if mode=='portfolio_dashboard':
+                for row in rows:
+                    if row['close'] is not None:
+                        elapsed=(datetime.date.fromisoformat(row['date'])-datetime.date(2026,1,1)).days
+                        value=str(Decimal(100)+Decimal(elapsed)/Decimal(20 if params['instrument']['value']=='^SP500TR' else 10))
+                        row['close']=row['source_close']=value
+                        if (root/'missing-history').exists() and params['instrument']['value']=='TEST' and row['date']=='2026-05-05': row['close']=row['source_close']=None
             last=next(r['date'] for r in reversed(rows) if r['close'] is not None)
             manifest = dict(instrument=params['instrument'], requested_start=params['start'], requested_end=params['end'],
                 coverage_start=start.isoformat(), anchor=params['anchor'], last_completed_session=last,
                 currency='USD', exchange_timezone='America/New_York', calendar='NYSE',calendar_version='5.4.0',
                 normalization_version=1,source_basis='total_return_index' if params['instrument']['value']=='^SP500TR' else 'yahoo_split_adjusted_close',completeness='unverified',
                 retrieved_at=at.isoformat())
+            if mode=='history_changed_manifest' and cursor: manifest['retrieved_at']=(at+datetime.timedelta(seconds=1)).isoformat()
             offset=int(params.get('cursor') or '0')
             items=rows[offset:offset+params['page_size']]
             next_offset=offset+len(items)
             result=dict(manifest=manifest,items=items,next_cursor=str(next_offset) if next_offset<len(rows) else None)
         elif method == 'market_data.daily':
             result = {'items': [{'instrument': params['instrument'], 'date': '2024-01-02', 'open': '100', 'high': '102', 'low': '99', 'close': '101', 'volume': 123, 'adjusted_close': '100.5', 'currency': 'USD', 'exchange_timezone': 'America/New_York', 'price_basis': 'source_reported', 'precision': 'decimal_source', 'source_url': 'https://example.test/history', 'retrieved_at': '2026-09-09T00:00:00Z'}], 'next_cursor': None, 'coverage': {'first_date': '2024-01-02', 'last_date': '2024-01-02', 'completeness': 'unverified'}}
-            if mode == 'portfolio_current':
+            if mode in ('portfolio_current','portfolio_dashboard'):
                 day = params['end']
                 result['items'][0].update(date=day, retrieved_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
                 result['coverage'].update(first_date=day, last_date=day)
+                if mode=='portfolio_dashboard':
+                    value=str(Decimal(100)+Decimal((datetime.date.fromisoformat(day)-datetime.date(2026,1,1)).days)/10)
+                    result['items'][0].update(open=value,high=value,low=value,close=value,adjusted_close=value)
             if mode == 'market_repeated_date' and not cursor:
                 result['next_cursor'] = 'page-two'
         elif method == 'filings.document':

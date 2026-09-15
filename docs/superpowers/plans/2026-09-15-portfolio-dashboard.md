@@ -10,6 +10,18 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-15-portfolio-dashboard-design.md` (approved by the user after commit `62d051c`).
 
+## Execution outcome — September 15, 2026
+
+Implemented inline at the user's request on `feat/portfolio-dashboard`, in `.worktrees/portfolio-dashboard`. The task-level record below supersedes the original prescriptive step checklists; those are retained as design history, not open work.
+
+- [x] Tasks 1–4: historical contract, pinned provider, immutable evidence storage and managed-worker integration.
+- [x] Tasks 5–7: shared replay cursor, exact daily returns/benchmark calculations, owned revision-bound persisted jobs.
+- [x] Tasks 8–9: bounded native transport, exact dashboard metrics, current summary, allocation and sortable holdings.
+- [x] Tasks 10–11: chart/ranges/data/source details, cached history controller, holding drawer and unsent research handoff.
+- [x] Task 12: inline review, Rust/Python/frontend/native suites, deterministic and live browser checks, documentation.
+
+Implementation choices: extended the existing `portfolio_qa` bridge and managed-worker Python fixture instead of adding duplicate QA hosts/providers. Split/fee arithmetic is tested in the pure engine; browser fixtures focus on interaction, account scope, missing prices, refresh and persistence. Used the existing plugin environment via `uv` because system Python lacked `ensurepip`. Followed the user's inline choice for implementation and review; no subagents were used. Final verification and precise limitations are recorded in [the verification report](../verification/2026-09-15-portfolio-dashboard.md).
+
 ## Global Constraints
 
 - “Financial arithmetic uses checked scale-18 decimals.”

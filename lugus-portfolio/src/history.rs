@@ -208,6 +208,7 @@ pub fn historical_values_cancellable(
         "account history range exceeds limit",
     )?;
     let mut output = Vec::new();
+    let mut issue_count = 0usize;
     let mut date = earliest;
     loop {
         if cancelled() {
@@ -327,6 +328,11 @@ pub fn historical_values_cancellable(
         day.observations.sort();
         day.observations.dedup();
         if date >= input.baseline {
+            issue_count = issue_count.saturating_add(day.issues.len());
+            require(
+                issue_count <= 100_000,
+                "historical coverage notes exceed limit; narrow the range or account",
+            )?;
             output.push(day);
         }
         if date == input.end {

@@ -168,13 +168,13 @@ fn v5_migration_preserves_runs_messages_and_workspace() {
     let workspace = s.workspace(&c.id).unwrap();
     drop(s);
     let sql = rusqlite::Connection::open(&path).unwrap();
-    sql.execute_batch("DROP TABLE portfolio_snapshot_rows; DROP TABLE portfolio_snapshots; DROP TABLE portfolio_prices; DROP TABLE portfolio_refreshes; DROP TABLE portfolio_history; DROP TABLE portfolio_requests; DROP TABLE portfolio_event_ids; DROP TABLE portfolios; DROP TABLE conversation_preparations; PRAGMA user_version=5;")
+    sql.execute_batch("DROP TABLE portfolio_history_evidence; DROP TABLE portfolio_performance_days; DROP TABLE portfolio_history_jobs; DROP TABLE portfolio_snapshot_rows; DROP TABLE portfolio_snapshots; DROP TABLE portfolio_prices; DROP TABLE portfolio_refreshes; DROP TABLE portfolio_history; DROP TABLE portfolio_requests; DROP TABLE portfolio_event_ids; DROP TABLE portfolios; DROP TABLE conversation_preparations; PRAGMA user_version=5;")
         .unwrap();
     let s = legacy_store(&path, &fin);
     assert_eq!(
         sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
     assert_eq!(s.run(&c.id, &r.id).unwrap(), r);
     assert_eq!(s.messages(&c.id, page()).unwrap(), messages);

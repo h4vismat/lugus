@@ -18,6 +18,7 @@ pub(super) fn history_inputs(
     baseline: Day,
     end: Day,
     bundles: &[(HistoryEvidenceRef, HistoryReadPage)],
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<OwnedHistoryInput> {
     if account.is_some_and(|id| !doc.accounts.iter().any(|a| a.id == id)) {
         return Err(invalid("history account mismatch"));
@@ -95,6 +96,13 @@ pub(super) fn history_inputs(
             })
             .collect::<Vec<_>>();
         for (index, item) in page.items.iter().enumerate() {
+            if cancelled() {
+                return Err(crate::AppError::new(
+                    crate::ErrorKind::Cancelled,
+                    "historical normalization cancelled",
+                    false,
+                ));
+            }
             let row = &item.day;
             if index > 0 && page.items[index - 1].day.date.succ_opt() != Some(row.date) {
                 return Err(invalid("nonconsecutive historical evidence"));

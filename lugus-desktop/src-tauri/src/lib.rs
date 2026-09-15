@@ -163,7 +163,7 @@ impl Bridge {
         let available = settings.view().runtime_available;
         let app = ApplicationConfig::load(base.join(config.application_config))
             .await?
-            .open(offline || !settings.has_profiles())
+            .open(offline)
             .await?;
         let host =
             ConversationHost::start(app.clone(), Arc::new(settings.clone()), settings.options())
@@ -248,7 +248,7 @@ impl Bridge {
             Command::Info => match &self.settings {
                 Some(settings) => {
                     let view = settings.view();
-                    json!({"runtime_available":view.runtime_available,"offline":!view.runtime_available,"agent":view.selected})
+                    json!({"runtime_available":view.runtime_available,"offline":view.offline,"agent":view.selected})
                 }
                 None => {
                     json!({"runtime_available":self.runtime_available,"offline":!self.runtime_available})
