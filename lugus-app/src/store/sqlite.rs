@@ -82,7 +82,7 @@ impl SqliteApplicationStore {
                 ));
             }
             tx.execute_batch("CREATE TABLE app_records(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repository TEXT NOT NULL,category TEXT NOT NULL,payload TEXT NOT NULL); CREATE TABLE dataset_rows(dataset_id TEXT NOT NULL REFERENCES app_records(id),ordinal INTEGER NOT NULL,payload TEXT NOT NULL,observation_id INTEGER,PRIMARY KEY(dataset_id,ordinal)); CREATE TABLE view_requests(workspace TEXT NOT NULL,request TEXT NOT NULL,input TEXT NOT NULL,view_id TEXT NOT NULL REFERENCES app_records(id),PRIMARY KEY(workspace,request)); PRAGMA application_id=1280657235; PRAGMA user_version=1;").map_err(storage)?;
-        } else if !(1..=7).contains(&version) || application != 1280657235 {
+        } else if !(1..=8).contains(&version) || application != 1280657235 {
             return Err(error(
                 ErrorKind::Storage,
                 "unsupported application database schema",
@@ -105,6 +105,10 @@ impl SqliteApplicationStore {
         }
         if version < 7 {
             super::portfolio::migrate(&tx)?;
+        }
+        if version < 8 {
+            tx.execute_batch(include_str!("portfolio/history-v8.sql"))
+                .map_err(storage)?;
         }
         let stored_limits = super::conversations::configured_limits(&tx)?;
         if requested

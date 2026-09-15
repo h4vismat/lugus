@@ -1,10 +1,60 @@
 //! Durable user portfolio commands, read models and accounting boundaries.
+mod history;
+mod history_lease;
 mod prices;
+pub use history::*;
+pub use history_lease::HistoryLease;
 mod types;
 use crate::{PageRequest, Result};
 pub use prices::yfinance_price_input;
 pub use types::*;
 pub trait PortfolioStore: Send {
+    fn portfolio_history_request(
+        &self,
+        r: &PortfolioHistoryRequest,
+    ) -> Result<Option<PortfolioHistoryResult>>;
+    fn portfolio_history_cached(&self, p: &str) -> Result<Option<PortfolioHistoryResult>>;
+    fn portfolio_history_acquire(&self, portfolio_id: &str) -> Result<HistoryLease>;
+    fn portfolio_history_begin(
+        &mut self,
+        r: &PortfolioHistoryRequest,
+        key: &HistoryKey,
+        lease: &HistoryLease,
+    ) -> Result<(PortfolioHistoryResult, bool)>;
+    fn portfolio_history_save_rows(
+        &mut self,
+        id: &str,
+        offset: usize,
+        rows: &[lugus_portfolio::PerformancePoint],
+    ) -> Result<()>;
+    fn portfolio_history_finish(
+        &mut self,
+        r: &PortfolioHistoryResult,
+    ) -> Result<PortfolioHistoryResult>;
+    fn portfolio_history_read(
+        &self,
+        portfolio_id: &str,
+        id: &str,
+    ) -> Result<PortfolioHistoryResult>;
+    fn portfolio_history_latest(
+        &self,
+        portfolio_id: &str,
+        account: Option<&str>,
+        range: &HistoryRange,
+    ) -> Result<Option<PortfolioHistoryResult>>;
+    fn portfolio_history_page(
+        &self,
+        portfolio_id: &str,
+        id: &str,
+        page: PageRequest,
+    ) -> Result<PortfolioHistoryPage>;
+    fn portfolio_history_evidence(
+        &self,
+        portfolio_id: &str,
+        id: &str,
+        page: PageRequest,
+    ) -> Result<PortfolioPage<HistoryEvidenceRef>>;
+
     fn portfolio_refresh_begin(&mut self, r: &RefreshRequest) -> Result<(RefreshResult, bool)>;
     fn portfolio_refresh_finish(&mut self, r: &RefreshResult) -> Result<RefreshResult>;
     fn portfolio_refresh_read(&self, id: &str) -> Result<RefreshResult>;

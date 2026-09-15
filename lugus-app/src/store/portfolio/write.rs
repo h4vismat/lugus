@@ -73,6 +73,7 @@ pub(super) fn propose(
             ));
         }
         PortfolioDocument {
+            benchmark_instance_id: None,
             header: PortfolioHeader {
                 id: s.ids.next_id(),
                 name: String::new(),
@@ -108,6 +109,12 @@ pub(super) fn propose(
         instrument_ids: vec![],
     };
     match &r.mutation {
+        PortfolioMutation::SetBenchmarkProvider { instance_id } => {
+            if let Some(value) = instance_id {
+                crate::portfolio::id(value)?;
+            }
+            d.benchmark_instance_id = instance_id.clone();
+        }
         PortfolioMutation::CreatePortfolio { name: n }
         | PortfolioMutation::RenamePortfolio { name: n } => {
             name(n)?;

@@ -1,5 +1,7 @@
 use super::*;
 use crate::portfolio::*;
+mod history;
+mod history_input;
 mod prices;
 pub(super) use prices::PortfolioJob;
 impl Application {
@@ -22,6 +24,21 @@ impl Application {
             .map_err(|_| error(ErrorKind::Storage, "portfolio task failed"))?
     }
     pub async fn execute_portfolio(&self, r: PortfolioCommand) -> Result<PortfolioReceipt> {
+        if let PortfolioMutation::SetBenchmarkProvider {
+            instance_id: Some(id),
+        } = &r.mutation
+        {
+            if !self
+                .history_providers()?
+                .iter()
+                .any(|p| &p.instance_id == id)
+            {
+                return Err(crate::portfolio::invalid(
+                    "benchmark provider is unavailable or incompatible",
+                ));
+            }
+        }
+
         self.portfolio_effect(move |s| s.portfolio_execute(&r))
             .await
     }

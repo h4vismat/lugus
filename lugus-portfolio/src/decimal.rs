@@ -94,6 +94,20 @@ impl Decimal {
         let unit = BigInt::from(10u8).pow(16);
         Self::from_coefficient(rounded(self.coefficient.clone(), unit.clone())? * unit)
     }
+    /// Apply an exact rational action chain, rounding only its final scale-18 value.
+    pub fn adjusted_by_splits(&self, splits: &[(u64, u64)]) -> Result<Self> {
+        crate::require(splits.len() <= 1000, "split action chain exceeds limit")?;
+        let mut numerator = self.coefficient.clone();
+        let mut denominator = BigInt::from(1u8);
+        for (n, d) in splits {
+            if *n == 0 || *d == 0 {
+                return Err(PortfolioError::InvalidNumber);
+            }
+            numerator *= *n;
+            denominator *= *d;
+        }
+        Self::from_coefficient(rounded(numerator, denominator)?)
+    }
     pub fn split_exact(&self, n: u64, d: u64) -> Result<Self> {
         if n == 0 || d == 0 {
             return Err(PortfolioError::InvalidNumber);

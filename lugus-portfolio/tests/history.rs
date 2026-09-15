@@ -99,3 +99,14 @@ fn split_evidence_is_reconciled_per_account_and_mismatch_persists() {
         );
     }
 }
+#[test]
+fn split_chain_rounds_only_once_after_exact_ratio_product() {
+    assert_eq!(
+        d("3").adjusted_by_splits(&[(1, 3), (3, 1)]).unwrap(),
+        d("3")
+    );
+    assert_eq!(
+        d("499.23").adjusted_by_splits(&[(1, 4)]).unwrap(),
+        d("124.8075")
+    );
+}

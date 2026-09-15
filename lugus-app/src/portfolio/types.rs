@@ -25,6 +25,9 @@ pub struct PortfolioCommand {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PortfolioMutation {
+    SetBenchmarkProvider {
+        instance_id: Option<String>,
+    },
     CreatePortfolio {
         name: String,
     },
@@ -127,6 +130,8 @@ pub struct PortfolioBinding {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortfolioDocument {
+    #[serde(default)]
+    pub benchmark_instance_id: Option<String>,
     pub header: PortfolioHeader,
     pub instruments: Vec<Instrument>,
     pub accounts: Vec<Account>,

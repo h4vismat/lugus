@@ -2,6 +2,7 @@ use super::{SqliteApplicationStore, storage};
 use crate::{AppError, ErrorKind, PageRequest, Result, portfolio::*};
 use lugus_portfolio::*;
 use rusqlite::{OptionalExtension, params};
+pub(super) mod history;
 mod prices;
 mod snapshots;
 mod write;
@@ -96,6 +97,70 @@ pub(crate) fn view(
     })
 }
 impl PortfolioStore for SqliteApplicationStore {
+    fn portfolio_history_request(
+        &self,
+        r: &PortfolioHistoryRequest,
+    ) -> Result<Option<PortfolioHistoryResult>> {
+        history::request(self, r)
+    }
+    fn portfolio_history_cached(&self, p: &str) -> Result<Option<PortfolioHistoryResult>> {
+        history::cached(self, p)
+    }
+
+    fn portfolio_history_acquire(&self, p: &str) -> Result<HistoryLease> {
+        read(&self.connection, p)?;
+        HistoryLease::acquire(&self.store_key, p)
+    }
+    fn portfolio_history_begin(
+        &mut self,
+        r: &PortfolioHistoryRequest,
+        k: &HistoryKey,
+        l: &HistoryLease,
+    ) -> Result<(PortfolioHistoryResult, bool)> {
+        history::begin(self, r, k, l)
+    }
+    fn portfolio_history_save_rows(
+        &mut self,
+        id: &str,
+        offset: usize,
+        rows: &[PerformancePoint],
+    ) -> Result<()> {
+        history::save(self, id, offset, rows)
+    }
+    fn portfolio_history_finish(
+        &mut self,
+        r: &PortfolioHistoryResult,
+    ) -> Result<PortfolioHistoryResult> {
+        history::finish(self, r)
+    }
+    fn portfolio_history_read(&self, p: &str, id: &str) -> Result<PortfolioHistoryResult> {
+        history::read_result(self, p, id)
+    }
+    fn portfolio_history_latest(
+        &self,
+        p: &str,
+        a: Option<&str>,
+        range: &HistoryRange,
+    ) -> Result<Option<PortfolioHistoryResult>> {
+        history::latest(self, p, a, range)
+    }
+    fn portfolio_history_page(
+        &self,
+        p: &str,
+        id: &str,
+        page: PageRequest,
+    ) -> Result<PortfolioHistoryPage> {
+        history::read_page(self, p, id, page)
+    }
+    fn portfolio_history_evidence(
+        &self,
+        p: &str,
+        id: &str,
+        page: PageRequest,
+    ) -> Result<PortfolioPage<HistoryEvidenceRef>> {
+        history::evidence(self, p, id, page)
+    }
+
     fn portfolio_refresh_begin(&mut self, r: &RefreshRequest) -> Result<(RefreshResult, bool)> {
         prices::begin(self, r)
     }

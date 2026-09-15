@@ -75,18 +75,27 @@ for line in sys.stdin:
             if mode == 'apple_wrong_exchange': result['exchange']['value'] = 'NYQ'
             if mode == 'apple_missing': result['issuer_name'] = None
         elif method == 'historical_prices.daily':
-            manifest = dict(instrument=params['instrument'], requested_start=params['start'], requested_end=params['end'],
-                coverage_start='2025-12-31', anchor=params['anchor'], last_completed_session='2026-01-05',
-                currency='USD', exchange_timezone='America/New_York', calendar='NYSE',calendar_version='5.4.0',
-                normalization_version=1,source_basis='yahoo_split_adjusted_close',completeness='unverified',
-                retrieved_at='2026-01-05T22:00:00Z')
+            # Synthetic exchange schedule: no live market data is used by this peer.
+            start=datetime.date.fromisoformat(params['start'])-datetime.timedelta(days=1)
+            while start.weekday()>=5 or start.isoformat()=='2026-01-01': start-=datetime.timedelta(days=1)
+            anchor=datetime.date.fromisoformat(params['anchor'])
+            if not cursor: history_at=datetime.datetime.now(datetime.timezone.utc)
+            at=history_at
             rows=[]
-            for i in range(6):
-                day=datetime.date(2025,12,31)+datetime.timedelta(days=i)
-                session=day.isoformat() in ['2025-12-31','2026-01-02','2026-01-05']
-                rows.append(dict(date=day.isoformat(),market_close=day.isoformat()+'T21:00:00Z' if session else None,
-                    source_close='100' if session else None,close='100' if session else None,factor_to_anchor='1',
+            for i in range((anchor-start).days+1):
+                day=start+datetime.timedelta(days=i)
+                session=day.weekday()<5 and day.isoformat()!='2026-01-01'
+                close_at=datetime.datetime.combine(day,datetime.time(21),datetime.timezone.utc) if session else None
+                completed=close_at is not None and close_at<=at
+                rows.append(dict(date=day.isoformat(),market_close=close_at.isoformat() if close_at else None,
+                    source_close='100' if completed else None,close='100' if completed else None,factor_to_anchor='1',
                     split=None,unsupported_action=None,source_url='https://example.com/history'))
+            last=next(r['date'] for r in reversed(rows) if r['close'] is not None)
+            manifest = dict(instrument=params['instrument'], requested_start=params['start'], requested_end=params['end'],
+                coverage_start=start.isoformat(), anchor=params['anchor'], last_completed_session=last,
+                currency='USD', exchange_timezone='America/New_York', calendar='NYSE',calendar_version='5.4.0',
+                normalization_version=1,source_basis='total_return_index' if params['instrument']['value']=='^SP500TR' else 'yahoo_split_adjusted_close',completeness='unverified',
+                retrieved_at=at.isoformat())
             offset=int(params.get('cursor') or '0')
             items=rows[offset:offset+params['page_size']]
             next_offset=offset+len(items)

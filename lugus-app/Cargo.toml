@@ -19,6 +19,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 
 html5ever = "=0.38.0"
 encoding_rs = "=0.8.40"
+chrono-tz = "0.10"
 
 [dev-dependencies]
 base64 = "0.22"
