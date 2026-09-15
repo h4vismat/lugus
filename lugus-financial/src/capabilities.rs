@@ -23,3 +23,11 @@ pub trait MarketDataProvider: Provider + Send {
 }
 
 pub use crate::resolution::CompanyResolutionProvider;
+
+#[async_trait]
+pub trait HistoricalPricesProvider: Provider + Send {
+    async fn fetch_history(
+        &mut self,
+        query: &crate::historical_prices::HistoryQuery,
+    ) -> Result<crate::historical_prices::HistoryPage>;
+}

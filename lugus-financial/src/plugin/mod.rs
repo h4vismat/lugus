@@ -5,6 +5,7 @@ use crate::{
     error::{Error, ErrorKind, Result},
 };
 use async_trait::async_trait;
+mod history;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
