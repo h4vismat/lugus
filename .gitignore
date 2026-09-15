@@ -5,3 +5,5 @@
 docs/superpowers
 .env
 .idea
+.worktrees/
+.superpowers/
