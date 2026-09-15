@@ -10,6 +10,20 @@ use lugus_financial::{
 };
 pub trait EvidenceRepository: Send {
     fn repository_identity(&self) -> Result<String>;
+    fn history_run(
+        &self,
+        p: &ProviderIdentity,
+        id: i64,
+        limits: ReadLimits,
+    ) -> Result<lugus_financial::storage::history::HistoryRun>;
+    fn history_page(
+        &self,
+        p: &ProviderIdentity,
+        id: i64,
+        offset: usize,
+        limits: ReadLimits,
+    ) -> Result<lugus_financial::storage::history::HistoryReadPage>;
+
     fn instrument_observation(
         &self,
         p: &ProviderIdentity,
@@ -61,6 +75,28 @@ fn bounded(e: BoundedReadError) -> AppError {
     }
 }
 impl EvidenceRepository for SqliteRepository {
+    fn history_run(
+        &self,
+        p: &ProviderIdentity,
+        id: i64,
+        limits: ReadLimits,
+    ) -> Result<lugus_financial::storage::history::HistoryRun> {
+        lugus_financial::storage::history::HistoryRepository::history_run(self, p, id, limits)
+            .map_err(bounded)
+    }
+    fn history_page(
+        &self,
+        p: &ProviderIdentity,
+        id: i64,
+        offset: usize,
+        limits: ReadLimits,
+    ) -> Result<lugus_financial::storage::history::HistoryReadPage> {
+        lugus_financial::storage::history::HistoryRepository::history_page(
+            self, p, id, offset, limits,
+        )
+        .map_err(bounded)
+    }
+
     fn instrument_observation(
         &self,
         p: &ProviderIdentity,

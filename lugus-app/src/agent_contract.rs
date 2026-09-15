@@ -66,6 +66,7 @@ pub fn fetch_tool_specs(offering: &Offering) -> Vec<ToolSpec> {
                 ),
                 Operation::Document => ("source_url", text_schema(FetchCommand::MAX_TEXT_BYTES)),
                 Operation::Filings | Operation::Facts => ("query", financial_query_schema()),
+                Operation::HistoricalPrices => return None,
                 Operation::Prices => ("query", price_query_schema()),
                 Operation::InstrumentLookup => (
                     "query",

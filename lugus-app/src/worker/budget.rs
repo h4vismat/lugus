@@ -192,3 +192,15 @@ impl lugus_financial::instruments::InstrumentProvider for BoundedProvider<'_> {
         Ok(metadata)
     }
 }
+
+#[async_trait]
+impl HistoricalPricesProvider for BoundedProvider<'_> {
+    async fn fetch_history(
+        &mut self,
+        query: &lugus_financial::historical_prices::HistoryQuery,
+    ) -> Result<lugus_financial::historical_prices::HistoryPage> {
+        let page = self.budget.call(self.inner.fetch_history(query)).await?;
+        self.budget.accept(&page, page.items.len())?;
+        Ok(page)
+    }
+}

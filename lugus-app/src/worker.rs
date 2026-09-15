@@ -586,6 +586,11 @@ async fn fetch(
             repo.save_instrument_observation(provider.inner.identity(), query, &metadata)?;
             return Ok(());
         }
+        FetchCommand::HistoricalPrices { query, .. } => {
+            return application::history::ingest_history(repo, provider, query)
+                .await
+                .map(|_| ());
+        }
         FetchCommand::Prices { query, .. } => {
             return application::market::ingest_prices(repo, provider, query)
                 .await

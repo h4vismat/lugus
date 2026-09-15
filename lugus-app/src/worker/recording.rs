@@ -16,6 +16,7 @@ use std::cell::Cell;
 pub enum RunKind {
     Financial,
     Market,
+    Historical,
     Resolution,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,5 +198,54 @@ impl lugus_financial::instruments::InstrumentRepository for Recording<'_> {
             .save_instrument_observation(provider, request, metadata)?;
         self.instrument_observation = Some(observation.clone());
         Ok(observation)
+    }
+}
+
+impl lugus_financial::storage::history::HistoryRepository for Recording<'_> {
+    fn start_history_run(
+        &mut self,
+        p: &ProviderIdentity,
+        q: &lugus_financial::historical_prices::HistoryQuery,
+    ) -> Result<i64> {
+        let id = self.inner.start_history_run(p, q)?;
+        self.runs.push(RunReceipt {
+            kind: RunKind::Historical,
+            id,
+        });
+        Ok(id)
+    }
+    fn save_history_page(
+        &mut self,
+        run: i64,
+        page: &lugus_financial::historical_prices::HistoryPage,
+    ) -> Result<()> {
+        self.inner.save_history_page(run, page)
+    }
+    fn finish_history_run(&mut self, run: i64, error: Option<&Error>) -> Result<()> {
+        self.protocol_failed |=
+            error.is_some_and(|e| e.kind == lugus_financial::error::ErrorKind::Protocol);
+        let result = self.inner.finish_history_run(run, error);
+        self.finalization_failed.set(result.is_err());
+        result
+    }
+    fn history_run(
+        &self,
+        p: &ProviderIdentity,
+        run: i64,
+        limits: ReadLimits,
+    ) -> lugus_financial::storage::bounded::ReadResult<lugus_financial::storage::history::HistoryRun>
+    {
+        self.inner.history_run(p, run, limits)
+    }
+    fn history_page(
+        &self,
+        p: &ProviderIdentity,
+        run: i64,
+        offset: usize,
+        limits: ReadLimits,
+    ) -> lugus_financial::storage::bounded::ReadResult<
+        lugus_financial::storage::history::HistoryReadPage,
+    > {
+        self.inner.history_page(p, run, offset, limits)
     }
 }

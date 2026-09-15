@@ -24,6 +24,7 @@ use std::{
 pub trait ManagedProvider:
     FilingsProvider
     + FundamentalsProvider
+    + lugus_financial::capabilities::HistoricalPricesProvider
     + MarketDataProvider
     + CompanyResolutionProvider
     + lugus_financial::instruments::InstrumentProvider
@@ -87,6 +88,7 @@ impl ProviderFactory for ProcessProviderFactory {
 
 pub trait WorkerRepository:
     Repository
+    + lugus_financial::storage::history::HistoryRepository
     + MarketRepository
     + CatalogRepository
     + lugus_financial::instruments::InstrumentRepository

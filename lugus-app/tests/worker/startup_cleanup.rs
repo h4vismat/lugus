@@ -158,3 +158,13 @@ impl lugus_financial::instruments::InstrumentProvider for RegistrationFailurePro
         self.inner.lookup_instrument(q).await
     }
 }
+
+#[async_trait]
+impl lugus_financial::capabilities::HistoricalPricesProvider for RegistrationFailureProvider {
+    async fn fetch_history(
+        &mut self,
+        _query: &lugus_financial::historical_prices::HistoryQuery,
+    ) -> lugus_financial::error::Result<lugus_financial::historical_prices::HistoryPage> {
+        unreachable!()
+    }
+}

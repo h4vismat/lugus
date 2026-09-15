@@ -9,6 +9,7 @@ use std::time::Duration;
 
 pub use lugus_financial::{
     domain::{ProviderIdentity, Query},
+    historical_prices::HistoryQuery,
     market_data::PriceQuery,
     resolution::LookupRequest,
 };
@@ -116,6 +117,7 @@ pub enum Operation {
     Document,
     Prices,
     InstrumentLookup,
+    HistoricalPrices,
 }
 
 impl Operation {
@@ -125,6 +127,7 @@ impl Operation {
             Self::Filings | Self::Document => ("filings", 1),
             Self::Facts => ("fundamentals", 1),
             Self::Prices => ("market_data", 1),
+            Self::HistoricalPrices => ("historical_prices", 1),
             Self::InstrumentLookup => ("instrument_lookup", 1),
         }
     }
@@ -157,6 +160,10 @@ pub enum FetchCommand {
         instance_id: String,
         query: lugus_financial::instruments::InstrumentLookup,
     },
+    HistoricalPrices {
+        instance_id: String,
+        query: HistoryQuery,
+    },
     Prices {
         instance_id: String,
         query: PriceQuery,
@@ -175,6 +182,7 @@ impl FetchCommand {
             | Self::Facts { instance_id, .. }
             | Self::Document { instance_id, .. }
             | Self::InstrumentLookup { instance_id, .. }
+            | Self::HistoricalPrices { instance_id, .. }
             | Self::Prices { instance_id, .. } => instance_id,
         }
     }
@@ -187,6 +195,7 @@ impl FetchCommand {
             Self::Facts { .. } => Operation::Facts,
             Self::Document { .. } => Operation::Document,
             Self::Prices { .. } => Operation::Prices,
+            Self::HistoricalPrices { .. } => Operation::HistoricalPrices,
             Self::InstrumentLookup { .. } => Operation::InstrumentLookup,
         }
     }
@@ -217,6 +226,14 @@ impl FetchCommand {
             }
             Self::Document { source_url, .. } => {
                 require_text(source_url, "invalid document source URL")
+            }
+            Self::HistoricalPrices { query, .. } => {
+                map_validation(query.validate())?;
+                if query.cursor.is_some() {
+                    Err(invalid("root history query cannot contain a cursor"))
+                } else {
+                    Ok(())
+                }
             }
             Self::Prices { query, .. } => {
                 validate_identifier(&query.instrument.namespace, &query.instrument.value)?;
@@ -287,6 +304,10 @@ enum StrictFetchCommand {
     InstrumentLookup {
         instance_id: String,
         query: lugus_financial::instruments::InstrumentLookup,
+    },
+    HistoricalPrices {
+        instance_id: String,
+        query: HistoryQuery,
     },
     Prices {
         instance_id: String,
@@ -419,6 +440,9 @@ impl<'de> Deserialize<'de> for FetchCommand {
             },
             StrictFetchCommand::InstrumentLookup { instance_id, query } => {
                 Self::InstrumentLookup { instance_id, query }
+            }
+            StrictFetchCommand::HistoricalPrices { instance_id, query } => {
+                Self::HistoricalPrices { instance_id, query }
             }
             StrictFetchCommand::Prices { instance_id, query } => Self::Prices {
                 instance_id,

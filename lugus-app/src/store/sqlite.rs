@@ -195,6 +195,15 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     }
 }
 impl ApplicationStore for SqliteApplicationStore {
+    fn history_evidence_page(
+        &self,
+        scope: &Scope,
+        id: &str,
+        page: PageRequest,
+    ) -> Result<lugus_financial::storage::history::HistoryReadPage> {
+        self.read_history_evidence(scope, id, page)
+    }
+
     fn portfolio_store(&self) -> Result<&dyn crate::portfolio::PortfolioStore> {
         Ok(self)
     }
@@ -261,6 +270,7 @@ impl ApplicationStore for SqliteApplicationStore {
             Operation::Resolve => (Some(RunKind::Resolution), 2),
             Operation::Lookup => (Some(RunKind::Resolution), 1),
             Operation::Filings | Operation::Facts => (Some(RunKind::Financial), 1),
+            Operation::HistoricalPrices => (Some(RunKind::Historical), 1),
             Operation::Prices => (Some(RunKind::Market), 1),
             Operation::Document | Operation::InstrumentLookup => (None, 0),
         };

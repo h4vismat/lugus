@@ -5,6 +5,7 @@ mod bindings;
 mod conversations;
 mod evidence;
 mod freeze;
+mod history_evidence;
 mod passages;
 pub use passages::{PassageStore, PreparedText, TextPreparation, TextPreparationInput};
 mod portfolio;
@@ -16,6 +17,18 @@ use lugus_financial::resolution::catalog::CatalogSelection;
 pub use sqlite::SqliteApplicationStore;
 
 pub trait ApplicationStore: Send {
+    fn history_evidence_page(
+        &self,
+        _scope: &Scope,
+        _id: &str,
+        _page: PageRequest,
+    ) -> Result<lugus_financial::storage::history::HistoryReadPage> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "historical evidence unavailable",
+        ))
+    }
+
     fn portfolio_store(&self) -> Result<&dyn crate::portfolio::PortfolioStore> {
         Err(error(
             ErrorKind::Unsupported,

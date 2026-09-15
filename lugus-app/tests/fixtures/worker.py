@@ -22,12 +22,12 @@ for line in sys.stdin:
         (root / 'pid').write_text(str(os.getpid()))
         result = {'protocol_version': 2 if mode == 'startup_failure' else 1,
                   'plugin_id': config.get('plugin_id', 'worker-fixture'), 'plugin_version': config.get('version', '1'),
-                  'capabilities': {'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1, 'instrument_lookup': 2 if mode == 'instrument_unsupported' else 1}}
+                  'capabilities': {'historical_prices': 1, 'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1, 'instrument_lookup': 2 if mode == 'instrument_unsupported' else 1}}
     else:
         cursor = params.get('cursor')
         (root / ('second' if cursor else 'first')).touch()
         if method == 'market_data.daily': (root / 'prices-started').touch()
-        if (mode == 'apple_price_blocked' and method == 'market_data.daily') or mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
+        if (mode == 'history_blocked' and method == 'historical_prices.daily') or (mode == 'apple_price_blocked' and method == 'market_data.daily') or mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
             while not (root / 'release').exists():
                 # A killed CLI cannot run normal child cleanup. During a blocked
                 # response, EOF on the request pipe means its owner is gone.
@@ -74,6 +74,23 @@ for line in sys.stdin:
             if mode == 'apple_wrong_issuer': result['issuer_name'] = 'Another Issuer Inc.'
             if mode == 'apple_wrong_exchange': result['exchange']['value'] = 'NYQ'
             if mode == 'apple_missing': result['issuer_name'] = None
+        elif method == 'historical_prices.daily':
+            manifest = dict(instrument=params['instrument'], requested_start=params['start'], requested_end=params['end'],
+                coverage_start='2025-12-31', anchor=params['anchor'], last_completed_session='2026-01-05',
+                currency='USD', exchange_timezone='America/New_York', calendar='NYSE',calendar_version='5.4.0',
+                normalization_version=1,source_basis='yahoo_split_adjusted_close',completeness='unverified',
+                retrieved_at='2026-01-05T22:00:00Z')
+            rows=[]
+            for i in range(6):
+                day=datetime.date(2025,12,31)+datetime.timedelta(days=i)
+                session=day.isoformat() in ['2025-12-31','2026-01-02','2026-01-05']
+                rows.append(dict(date=day.isoformat(),market_close=day.isoformat()+'T21:00:00Z' if session else None,
+                    source_close='100' if session else None,close='100' if session else None,factor_to_anchor='1',
+                    split=None,unsupported_action=None,source_url='https://example.com/history'))
+            offset=int(params.get('cursor') or '0')
+            items=rows[offset:offset+params['page_size']]
+            next_offset=offset+len(items)
+            result=dict(manifest=manifest,items=items,next_cursor=str(next_offset) if next_offset<len(rows) else None)
         elif method == 'market_data.daily':
             result = {'items': [{'instrument': params['instrument'], 'date': '2024-01-02', 'open': '100', 'high': '102', 'low': '99', 'close': '101', 'volume': 123, 'adjusted_close': '100.5', 'currency': 'USD', 'exchange_timezone': 'America/New_York', 'price_basis': 'source_reported', 'precision': 'decimal_source', 'source_url': 'https://example.test/history', 'retrieved_at': '2026-09-09T00:00:00Z'}], 'next_cursor': None, 'coverage': {'first_date': '2024-01-02', 'last_date': '2024-01-02', 'completeness': 'unverified'}}
             if mode == 'portfolio_current':
