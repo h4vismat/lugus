@@ -98,3 +98,18 @@ exhausted timeouts/outages return at least five seconds. Subsequent fresh reques
 respect that delay without hitting Yahoo. Snapshot pagination does not refetch.
 Missing or malformed data and configuration failures are not retried. See the
 [recovery report](../../../docs/data-fetch-recovery.md) for guarantees and limits.
+
+
+## Historical prices
+
+Version 0.3.0 adds `historical_prices.daily`. Its immutable paged snapshot includes
+all calendar dates from the preceding trading session through the current New York
+normalization date. It uses pinned `pandas_market_calendars==5.4.0` exchange schedules.
+Missing session prices remain null. Stock splits after the requested chart range
+still participate in reversing Yahoo Close into trading-date share prices.
+`^SP500TR` is preserved as an unmodified total-return index level.
+
+See [historical prices v1](../../docs/protocol/historical-prices-v1.md).
+Run `python live_history_check.py --output /tmp/lugus-history-live.json` in the plugin
+virtual environment for a read-only source check of Apple's 2020 split and the
+S&P 500 total-return index. Source completeness remains explicitly unverified.

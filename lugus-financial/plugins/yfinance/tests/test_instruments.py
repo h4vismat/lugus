@@ -99,8 +99,8 @@ class InstrumentTests(unittest.TestCase):
             return dict(SOURCE)
         p = provider.Provider(fetch_metadata=fetch, clock=lambda:AT)
         init = provider.handle(p, {'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocol_version':1,'config':{}}})
-        self.assertEqual(init['result']['capabilities'], {'market_data':1, 'instrument_lookup':1})
-        self.assertEqual(init['result']['plugin_version'], '0.2.0')
+        self.assertEqual(init['result']['capabilities'], {'market_data':1, 'instrument_lookup':1, 'historical_prices':1})
+        self.assertEqual(init['result']['plugin_version'], '0.3.0')
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             response = provider.handle(p, {'jsonrpc':'2.0','id':2,'method':'instrument_lookup.lookup','params':Q})

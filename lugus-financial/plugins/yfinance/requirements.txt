@@ -1,1 +1,2 @@
 yfinance==1.7.0
+pandas_market_calendars==5.4.0

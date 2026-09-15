@@ -17,7 +17,7 @@ pub fn yfinance_price_input(
     as_of: Day,
 ) -> Option<PriceInput> {
     if provider.plugin_id != "yfinance"
-        || provider.plugin_version != "0.2.0"
+        || !matches!(provider.plugin_version.as_str(), "0.2.0" | "0.3.0")
         || provider.instance_id != binding.instance_id
         || bar.instrument != binding.native_id
         || bar.currency != "USD"

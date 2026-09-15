@@ -149,7 +149,8 @@ def fetch_history(symbol, options):
         # In 1.7.0 history populates this cache. Read only the required public
         # metadata keys; iterating the lazy metadata mapping can fetch tradingPeriods.
         metadata = ticker.get_history_metadata()
-        source_metadata = {key: metadata.get(key) for key in ('currency','exchangeTimezoneName')}
+        keys = ('currency','exchangeTimezoneName','exchangeName','symbol') if options.get('actions') else ('currency','exchangeTimezoneName')
+        source_metadata = {key: metadata.get(key) for key in keys}
         return frame_rows(frame), source_metadata
     except ProviderError:
         raise
@@ -177,6 +178,7 @@ class Provider:
         self.snapshot = None
         self.next_cursor = None
         self.offset = 0
+        self.historical = None
 
     def initialize(self, params):
         self.initialized = False
@@ -186,7 +188,14 @@ class Provider:
         if params.get('config') != {}:
             raise ProviderError('configuration', 'Yfinance configuration must be an empty object')
         self.initialized = True
-        return dict(protocol_version=1,plugin_id='yfinance',plugin_version='0.2.0',capabilities={'market_data':1, 'instrument_lookup':1})
+        from history import HistoricalProvider
+        self.historical = HistoricalProvider(self.fetch, self.clock, self.recovery)
+        return dict(protocol_version=1,plugin_id='yfinance',plugin_version='0.3.0',capabilities={'market_data':1, 'instrument_lookup':1, 'historical_prices':1})
+
+    def historical_daily(self, params):
+        if not self.initialized:
+            raise ProviderError('configuration', 'Initialize the provider first')
+        return self.historical.daily(params)
 
     def lookup_instrument(self, params):
         if not self.initialized:
@@ -239,6 +248,8 @@ def handle(provider, request):
             result = provider.lookup_instrument(params)
         elif request['method'] == 'market_data.daily':
             result = provider.daily(params)
+        elif request['method'] == 'historical_prices.daily':
+            result = provider.historical_daily(params)
         else:
             raise ProviderError('unsupported','Unknown method',-32601)
         return dict(jsonrpc='2.0',id=request_id,result=result)
