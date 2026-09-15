@@ -1,0 +1,101 @@
+use lugus_portfolio::*;
+use serde_json::json;
+#[test]
+fn incremental_replay_matches_accounting_and_rejects_backwards_dates() {
+    let ledger: Ledger = serde_json::from_value(
+        json!({"account_id":"a","start":"2026-01-01","opening":{"kind":"full_history"},"events":[
+            {"id":"d","date":"2026-01-01","order":0,"kind":{"kind":"deposit","amount":"100"}},
+            {"id":"w","date":"2026-01-03","order":0,"kind":{"kind":"withdrawal","amount":"25"}}
+        ]}),
+    )
+    .unwrap();
+    let mut cursor = ReplayCursor::new(&ledger).unwrap();
+    for text in ["2026-01-01", "2026-01-02", "2026-01-03"] {
+        let day = text.parse().unwrap();
+        assert_eq!(
+            cursor.advance_to(day).unwrap(),
+            &replay(&ledger, day).unwrap()
+        );
+    }
+    assert!(cursor.advance_to("2026-01-02".parse().unwrap()).is_err());
+}
+#[test]
+fn cancellation_is_checked_before_advancing() {
+    let ledger:Ledger=serde_json::from_value(json!({"account_id":"a","start":"2026-01-01","opening":{"kind":"full_history"},"events":[]})).unwrap();
+    let mut cursor = ReplayCursor::new(&ledger).unwrap();
+    assert_eq!(
+        cursor.advance_to_cancellable(ledger.start, &|| true),
+        Err(PortfolioError::Cancelled)
+    );
+}
+fn d(s: &str) -> Decimal {
+    Decimal::parse(s).unwrap()
+}
+#[test]
+fn existing_account_enters_at_market_value_and_missing_sessions_are_gaps() {
+    let ledgers:Vec<Ledger>=serde_json::from_value(json!([{"account_id":"a","start":"2026-01-02","opening":{"kind":"existing","cash":"10","lots":[{"id":"l","instrument_id":"x","acquired":"2020-01-01","tie_order":0,"quantity":"2","basis":"5","simplified":false,"date_assumed":false}]},"events":[]}])).unwrap();
+    let closes:Vec<HistoricalClose>=serde_json::from_value(json!([
+        {"instrument_id":"x","date":"2026-01-01","session_close":"2026-01-01T21:00:00Z","close":"20","split":null,"observation_id":"1","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-02","session_close":"2026-01-02T21:00:00Z","close":"21","split":null,"observation_id":"2","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-03","session_close":null,"close":null,"split":null,"observation_id":"3","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-04","session_close":"2026-01-04T21:00:00Z","close":null,"split":null,"observation_id":"4","unsupported_action":null},
+        {"instrument_id":"x","date":"2026-01-05","session_close":"2026-01-05T21:00:00Z","close":"22","split":null,"observation_id":"5","unsupported_action":null}
+    ])).unwrap();
+    let days = historical_values(&ValuationHistoryInput {
+        ledgers: &ledgers,
+        closes: &closes,
+        benchmark: &[],
+        baseline: "2026-01-01".parse().unwrap(),
+        end: "2026-01-05".parse().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(days[0].value, Some(d("0")));
+    assert_eq!(days[1].opening_contribution, Some(d("50")));
+    assert_eq!(days[1].value, Some(d("52")));
+    assert_eq!(days[2].value, Some(d("52")));
+    assert_eq!(days[3].value, None);
+    assert_eq!(days[4].value, Some(d("54")));
+}
+#[test]
+fn split_evidence_is_reconciled_per_account_and_mismatch_persists() {
+    for (n, den, quantity, before, after) in [(2, 1, "10", "20", "10"), (1, 10, "10", "20", "200")]
+    {
+        let ledger:Ledger=serde_json::from_value(json!({"account_id":"a","start":"2026-01-01","opening":{"kind":"existing","cash":"0","lots":[{"id":"l","instrument_id":"x","acquired":"2020-01-01","tie_order":0,"quantity":quantity,"basis":"5","simplified":false,"date_assumed":false}]},"events":[{"id":"split","date":"2026-01-02","order":0,"kind":{"kind":"split","instrument_id":"x","numerator":n,"denominator":den,"action_id":"action"}}]})).unwrap();
+        let closes:Vec<HistoricalClose>=serde_json::from_value(json!([
+            {"instrument_id":"x","date":"2025-12-31","session_close":"2025-12-31T21:00:00Z","close":before,"split":null,"observation_id":"0","unsupported_action":null},
+            {"instrument_id":"x","date":"2026-01-01","session_close":"2026-01-01T21:00:00Z","close":before,"split":null,"observation_id":"1","unsupported_action":null},
+            {"instrument_id":"x","date":"2026-01-02","session_close":"2026-01-02T21:00:00Z","close":after,"split":[n,den],"observation_id":"2","unsupported_action":null},
+            {"instrument_id":"x","date":"2026-01-03","session_close":"2026-01-03T21:00:00Z","close":after,"split":null,"observation_id":"3","unsupported_action":null}
+        ])).unwrap();
+        let mut ledgers = vec![ledger];
+        let run = |ledgers: &[Ledger]| {
+            historical_values(&ValuationHistoryInput {
+                ledgers,
+                closes: &closes,
+                benchmark: &[],
+                baseline: "2026-01-01".parse().unwrap(),
+                end: "2026-01-03".parse().unwrap(),
+            })
+            .unwrap()
+        };
+        let values = run(&ledgers);
+        assert!(values.iter().all(|v| v.value == Some(d("200"))));
+        assert_eq!(
+            replay(&ledgers[0], "2026-01-03".parse().unwrap())
+                .unwrap()
+                .lots[0]
+                .basis,
+            d("5")
+        );
+        ledgers[0].events.clear();
+        let values = run(&ledgers);
+        assert_eq!(values[1].value, None);
+        assert_eq!(values[2].value, None);
+        assert!(
+            values[2]
+                .issues
+                .iter()
+                .any(|i| i.code == HistoryIssueCode::SplitMismatch)
+        );
+    }
+}
