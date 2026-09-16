@@ -10,14 +10,17 @@ flowchart LR
     B --> C[Application validation and identity resolution]
     C --> D[Application provider calls]
     D --> E[Immutable local evidence package]
-    E --> F[Offline analysis agent]
+    E --> F[Analysis agent with saved evidence]
+    B --> H[Web request and enabled search policy]
+    H --> F
+    F --> I[Native web search when enabled]
     C --> G[Clarification when ambiguous]
 ```
 
 ## Responsibilities and boundaries
 
-The interpreter proposes one of conversation, research, prices, comparison or
-clarification, with at most two company mentions and a bounded date range. It
+The interpreter proposes one of conversation, web search, research, prices,
+comparison or clarification, with at most two company mentions and a bounded date range. It
 uses the existing runtime port, has no tools or web search, and must return
 strict, size-limited JSON. Application code validates its output. It cannot
 choose arbitrary URLs, plugins, commands or financial concepts.
@@ -44,8 +47,12 @@ preparation records; failed analysis does not discard successfully prepared data
 Conversation history is bounded with space reserved for evidence.
 
 The default `ConversationHost::start` enforces this flow. Analysis receives only
-an explicit offline evidence-tool allowlist with web search disabled. Dispatch
-also rejects hidden retrieval calls. `start_with_interpreter` supports other
+an explicit offline evidence-tool allowlist. Native web search is disabled by
+default, but an explicit `ConversationOptions.allow_web_search` setting or a
+snapshotted `RuntimeFactory.web_search()` preference can enable it for the
+answering session. Interpretation remains tool-free. Portfolio-only analysis
+keeps native search disabled. Dispatch still rejects hidden financial retrieval
+calls. `start_with_interpreter` supports other
 interpretation implementations. `start_with_tools` is an explicit low-level
 legacy API retained for library clients and lifecycle fixtures; desktop chat
 does not use it.
@@ -61,6 +68,13 @@ does not use it.
   are introduced; this is not exhaustive financial-statement coverage.
 - Price charts and an assets table are prepared by the application. Filing
   documents are not automatically downloaded or interpreted in this version.
+- Web requests use a `web_search` intent with no company identifiers or financial
+  date range. They reach analysis without requiring a financial provider. If
+  search is disabled, the application returns settings guidance instead of
+  starting analysis. Topic and time constraints remain in the original message.
+  The answering agent is instructed to cite web URLs and disclose unavailable
+  search. Native web findings are transient, not durable financial datasets;
+  answers and their links remain in conversation history.
 - Ordinary conversation can use the previous saved evidence without a new fetch.
   Follow-up research can reuse exact successful fetches for 15 minutes, retaining
   original source timestamps. No automatic background refresh occurs.

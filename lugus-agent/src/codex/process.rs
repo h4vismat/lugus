@@ -35,6 +35,7 @@ pub(super) struct CodexProcess {
     stderr_drain: Option<JoinHandle<()>>,
     limits: TransportLimits,
     pending_frame: Vec<u8>,
+    scanned: usize,
     unusable: bool,
 }
 
@@ -77,6 +78,7 @@ impl CodexProcess {
             stderr_drain: Some(tokio::spawn(drain_stderr(stderr))),
             limits,
             pending_frame: Vec::new(),
+            scanned: 0,
             unusable: false,
         })
     }
@@ -125,9 +127,25 @@ impl CodexProcess {
         }
     }
 
+    pub(super) fn request_timeout(&self) -> Duration {
+        self.limits.request_timeout
+    }
+    pub(super) fn configure_research(&mut self, unlimited: bool) {
+        let defaults = TransportLimits::default();
+        self.limits.max_frame_bytes = if unlimited {
+            isize::MAX as usize
+        } else {
+            defaults.max_frame_bytes
+        };
+        self.limits.request_timeout = if unlimited {
+            Duration::MAX
+        } else {
+            defaults.request_timeout
+        };
+    }
     pub(super) async fn receive(&mut self) -> Result<Value> {
         self.ensure_usable()?;
-        let deadline = tokio::time::Instant::now() + self.limits.request_timeout;
+        let deadline = crate::deadline::Deadline::after(self.limits.request_timeout);
 
         loop {
             if let Some(frame) = self.take_complete_frame()? {
@@ -137,8 +155,11 @@ impl CodexProcess {
             let remaining = self.limits.max_frame_bytes + 1 - self.pending_frame.len();
             let mut bytes = [0_u8; 8192];
             let capacity = remaining.min(bytes.len());
-            let read =
-                tokio::time::timeout_at(deadline, self.stdout.read(&mut bytes[..capacity])).await;
+            let read = tokio::time::timeout(
+                deadline.remaining(),
+                self.stdout.read(&mut bytes[..capacity]),
+            )
+            .await;
 
             let count = match read {
                 Ok(Ok(count)) => count,
@@ -218,7 +239,11 @@ impl CodexProcess {
     }
 
     fn take_complete_frame(&mut self) -> Result<Option<Vec<u8>>> {
-        let Some(newline) = self.pending_frame.iter().position(|byte| *byte == b'\n') else {
+        let Some(offset) = self.pending_frame[self.scanned..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        else {
+            self.scanned = self.pending_frame.len();
             if self.pending_frame.len() > self.limits.max_frame_bytes {
                 return Err(self.fail(Error::FrameTooLarge {
                     limit: self.limits.max_frame_bytes,
@@ -227,6 +252,8 @@ impl CodexProcess {
             return Ok(None);
         };
 
+        let newline = self.scanned + offset;
+        self.scanned = 0;
         if newline > self.limits.max_frame_bytes {
             return Err(self.fail(Error::FrameTooLarge {
                 limit: self.limits.max_frame_bytes,

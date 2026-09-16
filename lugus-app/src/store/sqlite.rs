@@ -110,7 +110,18 @@ impl SqliteApplicationStore {
             tx.execute_batch(include_str!("portfolio/history-v8.sql"))
                 .map_err(storage)?;
         }
-        let stored_limits = super::conversations::configured_limits(&tx)?;
+        let mut stored_limits = super::conversations::configured_limits(&tx)?;
+        // Upgrade existing desktop databases as well as newly created chats.
+        if requested.as_ref()
+            == Some(&crate::conversations::ConversationLimits::unlimited_research())
+        {
+            stored_limits = requested.clone().unwrap();
+            tx.execute(
+                "UPDATE conversation_config SET limits=?1 WHERE singleton=1",
+                [serde_json::to_string(&stored_limits).map_err(storage)?],
+            )
+            .map_err(storage)?;
+        }
         if requested
             .as_ref()
             .is_some_and(|limits| *limits != stored_limits)

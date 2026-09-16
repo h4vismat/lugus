@@ -265,7 +265,11 @@ pub fn validate_extracted(
             &extracted.decoder,
             &extracted.limitations,
         ),
-        limits.max_source_bytes.min(64 * 1024),
+        if limits.max_text_bytes == isize::MAX as usize {
+            limits.max_source_bytes
+        } else {
+            limits.max_source_bytes.min(64 * 1024)
+        },
     )?;
     if extracted.text_checksum != text_checksum(&extracted.text) {
         return Err(invalid("canonical text checksum mismatch"));

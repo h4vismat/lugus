@@ -1,4 +1,6 @@
 //! Bounded native transport over the persisted application and conversation ports.
+mod companies;
+mod data_settings;
 mod portfolio;
 mod runtime;
 mod settings;
@@ -19,11 +21,25 @@ struct DesktopConfig {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    Company {
+        command: companies::Command,
+    },
     Portfolio {
         command: portfolio::Command,
     },
     Info,
     AgentSettings,
+    DataSettings,
+    WebSearchSettings,
+    SaveWebSearchSettings {
+        enabled: bool,
+    },
+    SaveDataSettings {
+        revision: String,
+        contact_name: String,
+        contact_email: String,
+        enabled: bool,
+    },
     SelectAgent {
         agent: runtime::AgentKind,
     },
@@ -105,12 +121,14 @@ pub struct Bridge {
     host: ConversationHost,
     runtime_available: bool,
     settings: Option<settings::Settings>,
+    companies: Option<companies::Store>,
+    data_settings: Option<data_settings::DataSettings>,
 }
 fn error(kind: ErrorKind, message: &'static str) -> AppError {
     AppError::new(kind, message, false)
 }
 fn value<T: Serialize>(item: T) -> Result<Value> {
-    lugus_app::agent_contract::check_serialized_size(&item, MAX_BYTES)?;
+    lugus_app::agent_contract::check_serialized_size(&item, isize::MAX as usize)?;
     serde_json::to_value(item)
         .map_err(|_| error(ErrorKind::InvalidInput, "response serialization failed"))
 }
@@ -123,7 +141,13 @@ impl Bridge {
             host,
             runtime_available,
             settings: None,
+            companies: None,
+            data_settings: None,
         }
+    }
+    pub fn with_company_store(mut self, path: &Path) -> Result<Self> {
+        self.companies = Some(companies::Store::open(path)?);
+        Ok(self)
     }
     pub async fn open(path: &Path, offline: bool) -> Result<Self> {
         let path = path.to_owned();
@@ -161,10 +185,19 @@ impl Bridge {
         .await
         .map_err(|_| error(ErrorKind::Unavailable, "configuration task stopped"))??;
         let available = settings.view().runtime_available;
-        let app = ApplicationConfig::load(base.join(config.application_config))
-            .await?
-            .open(offline)
-            .await?;
+        let application_path = base.join(config.application_config);
+        let data_settings = data_settings::DataSettings::open(application_path.clone(), offline)?;
+        let mut application = ApplicationConfig::load(application_path).await?;
+        application.limits = lugus_app::Limits::unlimited_research();
+        application.conversation_limits =
+            Some(lugus_app::conversations::ConversationLimits::unlimited_research());
+        let company_path = application
+            .application_path
+            .with_extension("companies.sqlite");
+        let companies = tokio::task::spawn_blocking(move || companies::Store::open(&company_path))
+            .await
+            .map_err(|_| error(ErrorKind::Storage, "Company storage task stopped"))??;
+        let app = application.open(offline).await?;
         let host =
             ConversationHost::start(app.clone(), Arc::new(settings.clone()), settings.options())
                 .await;
@@ -173,6 +206,8 @@ impl Bridge {
                 host,
                 runtime_available: available,
                 settings: Some(settings),
+                companies: Some(companies),
+                data_settings: Some(data_settings),
             }),
             Err(err) => {
                 let _ = app.shutdown().await;
@@ -215,7 +250,7 @@ impl Bridge {
             let result = read(page).await.and_then(|items| {
                 lugus_app::agent_contract::check_serialized_size(
                     &items,
-                    MAX_BYTES.min(self.host.application().limits().max_output_bytes),
+                    self.host.application().limits().max_output_bytes,
                 )?;
                 Ok(items)
             });
@@ -234,7 +269,7 @@ impl Bridge {
             .scope(&c.workspace_id, "desktop-read", None)
     }
     pub async fn dispatch(&self, payload: &str) -> Result<Value> {
-        if payload.len() > MAX_BYTES.min(self.host.application().limits().max_input_bytes) {
+        if payload.len() > self.host.application().limits().max_input_bytes {
             return Err(error(
                 ErrorKind::ResourceLimit,
                 "desktop command exceeds size limit",
@@ -244,6 +279,7 @@ impl Bridge {
             .map_err(|_| error(ErrorKind::InvalidInput, "invalid desktop command"))?;
         let app = self.host.application();
         let response = match command {
+            Command::Company { command } => companies::dispatch(self, command).await?,
             Command::Portfolio { command } => portfolio::dispatch(app, command).await?,
             Command::Info => match &self.settings {
                 Some(settings) => {
@@ -254,6 +290,57 @@ impl Bridge {
                     json!({"runtime_available":self.runtime_available,"offline":!self.runtime_available})
                 }
             },
+            Command::WebSearchSettings => value(
+                self.settings
+                    .as_ref()
+                    .ok_or_else(|| {
+                        error(
+                            ErrorKind::Unavailable,
+                            "Internet search settings are unavailable for this host",
+                        )
+                    })?
+                    .web_search_view(),
+            )?,
+            Command::SaveWebSearchSettings { enabled } => value(
+                self.settings
+                    .as_ref()
+                    .ok_or_else(|| {
+                        error(
+                            ErrorKind::Unavailable,
+                            "Internet search settings are unavailable for this host",
+                        )
+                    })?
+                    .save_web_search(enabled)
+                    .await?,
+            )?,
+            Command::DataSettings => value(
+                self.data_settings
+                    .as_ref()
+                    .ok_or_else(|| {
+                        error(
+                            ErrorKind::Unavailable,
+                            "Data-source settings are unavailable for this host",
+                        )
+                    })?
+                    .view(app)?,
+            )?,
+            Command::SaveDataSettings {
+                revision,
+                contact_name,
+                contact_email,
+                enabled,
+            } => value(
+                self.data_settings
+                    .as_ref()
+                    .ok_or_else(|| {
+                        error(
+                            ErrorKind::Unavailable,
+                            "Data-source settings are unavailable for this host",
+                        )
+                    })?
+                    .save(app.clone(), revision, contact_name, contact_email, enabled)
+                    .await?,
+            )?,
             Command::AgentSettings => value(
                 self.settings
                     .as_ref()
@@ -309,9 +396,31 @@ impl Bridge {
                 selected,
             } => {
                 self.writable()?;
+                // Company context is a host invariant, including clients that open a
+                // company conversation from the ordinary recent-conversation list.
+                if let Some(store) = &self.companies {
+                    match store.get(&conversation) {
+                        Ok(company) => {
+                            return companies::dispatch(
+                                self,
+                                companies::Command::Send {
+                                    company: company.id,
+                                    request,
+                                    text,
+                                    selected,
+                                    review: false,
+                                },
+                            )
+                            .await;
+                        }
+                        Err(error) if error.kind == ErrorKind::MissingData => {}
+                        Err(error) => return Err(error),
+                    }
+                }
                 run_value(
                     self.host
                         .send(SendMessageRequest {
+                            research_brief: None,
                             company_hint,
                             conversation_id: conversation,
                             request_id: request,
@@ -393,13 +502,39 @@ impl Bridge {
                 .await?,
             )?,
         };
-        lugus_app::agent_contract::check_serialized_size(
-            &response,
-            MAX_BYTES.min(app.limits().max_output_bytes),
-        )?;
+        lugus_app::agent_contract::check_serialized_size(&response, app.limits().max_output_bytes)?;
         Ok(response)
     }
     pub async fn shutdown(&self) -> Result<()> {
         self.host.shutdown().await
+    }
+}
+
+#[cfg(test)]
+mod research_budget_tests {
+    use super::*;
+    #[tokio::test]
+    async fn desktop_removes_persisted_research_budgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let application = dir.path().join("application.json");
+        std::fs::write(&application, serde_json::json!({"financial_path":"financial.sqlite","application_path":"application.sqlite","providers":[]}).to_string()).unwrap();
+        let old = ApplicationConfig::load(&application)
+            .await
+            .unwrap()
+            .open(true)
+            .await
+            .unwrap();
+        old.shutdown().await.unwrap();
+        drop(old);
+        let desktop = dir.path().join("desktop.json");
+        std::fs::write(&desktop, r#"{"application_config":"application.json"}"#).unwrap();
+        let bridge = Bridge::open(&desktop, true).await.unwrap();
+        assert_eq!(bridge.host.limits().activity_events, isize::MAX as usize);
+        assert_eq!(bridge.host.limits().assistant_bytes, isize::MAX as usize);
+        assert_eq!(
+            bridge.host.application().limits().operation_timeout,
+            std::time::Duration::MAX
+        );
+        bridge.shutdown().await.unwrap();
     }
 }

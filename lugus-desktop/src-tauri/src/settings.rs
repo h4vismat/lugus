@@ -26,10 +26,19 @@ pub(crate) struct AgentSettings {
     pub runtime_available: bool,
     agents: Vec<AgentOption>,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Preference {
     selected: AgentKind,
+    #[serde(default)]
+    allow_web_search: bool,
+}
+#[derive(Serialize)]
+pub(crate) struct WebSearchSettings {
+    enabled: bool,
+    offline: bool,
+    runtime_available: bool,
+    agent: AgentKind,
 }
 struct State {
     preference: Preference,
@@ -116,6 +125,7 @@ impl Settings {
             } else {
                 AgentKind::Codex
             },
+            allow_web_search: false,
         });
         Ok(Self(Arc::new(Mutex::new(State {
             preference,
@@ -157,25 +167,47 @@ impl Settings {
         if state.offline {
             return Err(failure("Agents are disabled in offline mode"));
         }
-        state
+        let mut profile = state
             .profiles
             .get(&state.preference.selected)
             .and_then(|p| p.as_ref().ok())
             .cloned()
-            .ok_or_else(|| failure("Select an installed agent in Settings to start chatting"))
+            .ok_or_else(|| failure("Select an installed agent in Settings to start chatting"))?;
+        profile.allow_web_search = state.preference.allow_web_search;
+        Ok(profile)
+    }
+
+    pub fn web_search_view(&self) -> WebSearchSettings {
+        Self::web_search_state(&self.state())
+    }
+    fn web_search_state(state: &State) -> WebSearchSettings {
+        WebSearchSettings {
+            enabled: state.preference.allow_web_search,
+            offline: state.offline,
+            runtime_available: Self::view_state(state).runtime_available,
+            agent: state.preference.selected,
+        }
+    }
+    pub async fn save_web_search(&self, enabled: bool) -> Result<WebSearchSettings> {
+        let settings = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut state = settings.state();
+            let preference = Preference {
+                allow_web_search: enabled,
+                ..state.preference.clone()
+            };
+            persist(&mut state, preference)?;
+            Ok(Self::web_search_state(&state))
+        })
+        .await
+        .map_err(|_| failure("Data-source settings task stopped"))?
     }
 
     pub fn options(&self) -> ConversationOptions {
         let mut options = ConversationOptions::default();
-        options.run_limits.timeout = std::time::Duration::from_secs(
-            self.state()
-                .profiles
-                .values()
-                .filter_map(|p| p.as_ref().ok())
-                .map(Profile::timeout_secs)
-                .max()
-                .unwrap_or(180),
-        );
+        options.run_limits.timeout = std::time::Duration::MAX;
+        options.run_limits.max_tool_calls = isize::MAX as usize;
+        options.run_limits.max_tool_result_bytes = isize::MAX as usize;
         options
     }
     pub async fn select(&self, agent: AgentKind) -> Result<AgentSettings> {
@@ -188,28 +220,35 @@ impl Settings {
                     "This agent is unavailable. Check its installation and desktop configuration.",
                 ));
             }
-            let preference = Preference { selected: agent };
-            let bytes = serde_json::to_vec_pretty(&preference)
-                .map_err(|_| failure("Could not save agent selection"))?;
-            let parent = state
-                .path
-                .parent()
-                .ok_or_else(|| failure("Invalid settings directory"))?;
-            let mut temporary = tempfile::NamedTempFile::new_in(parent)
-                .map_err(|_| failure("Could not save agent selection"))?;
-            temporary
-                .write_all(&bytes)
-                .and_then(|_| temporary.as_file().sync_all())
-                .map_err(|_| failure("Could not save agent selection"))?;
-            temporary
-                .persist(&state.path)
-                .map_err(|_| failure("Could not save agent selection"))?;
-            state.preference = preference;
+            let preference = Preference {
+                selected: agent,
+                ..state.preference.clone()
+            };
+            persist(&mut state, preference)?;
             Ok(Self::view_state(&state))
         })
         .await
         .map_err(|_| failure("Agent settings task stopped"))?
     }
+}
+fn persist(state: &mut State, preference: Preference) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(&preference)
+        .map_err(|_| failure("Could not save agent and search settings"))?;
+    let parent = state
+        .path
+        .parent()
+        .ok_or_else(|| failure("Invalid settings directory"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|_| failure("Could not save agent and search settings"))?;
+    temporary
+        .write_all(&bytes)
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|_| failure("Could not save agent and search settings"))?;
+    temporary
+        .persist(&state.path)
+        .map_err(|_| failure("Could not save agent and search settings"))?;
+    state.preference = preference;
+    Ok(())
 }
 #[async_trait::async_trait]
 impl RuntimeFactory for Settings {

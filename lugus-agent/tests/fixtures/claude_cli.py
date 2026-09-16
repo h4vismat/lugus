@@ -47,6 +47,9 @@ def rpc(method, params=None, headers=None, ident=1, raw=None):
 if scenario == 'progress':
     emit({'type': 'tool_progress', 'tool_use_id': 'native-id', 'tool_name': 'mcp__lugus__lookup', 'elapsed_time_seconds': 1})
     emit({'type': 'tool_use_summary', 'summary': 'Tool completed', 'preceding_tool_use_ids': ['native-id']})
+elif scenario == 'unlimited_large':
+    emit({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'x' * (9 * 1024 * 1024)})
+    sys.exit(0)
 elif scenario == 'malformed':
     print('not json', flush=True)
     time.sleep(30)

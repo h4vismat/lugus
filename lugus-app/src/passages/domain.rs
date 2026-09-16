@@ -31,9 +31,30 @@ impl Default for TextLimits {
     }
 }
 impl TextLimits {
-    /// Defaults are hard ceilings; deployments may tighten each independent budget.
+    /// Explicit desktop policy with only addressable-size bounds.
+    pub fn unlimited_research() -> Self {
+        let max = isize::MAX as usize;
+        Self {
+            max_input_bytes: max,
+            max_text_bytes: max,
+            max_nodes: max,
+            max_depth: max,
+            max_mappings: max,
+            max_source_bytes: max,
+            max_page_bytes: max,
+            max_passage_bytes: max,
+        }
+    }
+    pub(crate) fn for_research_mode(unlimited: bool) -> Self {
+        if unlimited {
+            Self::unlimited_research()
+        } else {
+            Self::default()
+        }
+    }
+    /// Bounded configurations retain their default ceilings; research is explicit.
     pub fn validate(&self) -> Result<()> {
-        let cap = Self::default();
+        let cap = Self::for_research_mode(self.max_text_bytes == isize::MAX as usize);
         for (value, maximum) in [
             (self.max_input_bytes, cap.max_input_bytes),
             (self.max_text_bytes, cap.max_text_bytes),

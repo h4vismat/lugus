@@ -182,7 +182,7 @@ where
         let result = fetch(limit).await.and_then(|value| {
             lugus_app::agent_contract::check_serialized_size(
                 &value,
-                super::MAX_BYTES.min(app.limits().max_output_bytes),
+                app.limits().max_output_bytes,
             )?;
             Ok(value)
         });
@@ -201,7 +201,7 @@ fn history_header(app: &Application, result: PortfolioHistoryResult) -> Result<V
     loop {
         match lugus_app::agent_contract::check_serialized_size(
             &value,
-            super::MAX_BYTES.min(app.limits().max_output_bytes),
+            app.limits().max_output_bytes,
         ) {
             Ok(()) => return Ok(value),
             Err(e) => {

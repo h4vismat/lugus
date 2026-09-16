@@ -10,14 +10,14 @@ function sameMetadata(left:unknown,right:unknown):boolean {
  return keys.length===Object.keys(b).length&&keys.every(key=>Object.hasOwn(b,key)&&sameMetadata(a[key],b[key]));
 }
 
-/** Read a bounded suffix of an immutable saved dataset, retaining its original header. */
+/** Read an immutable saved dataset, or an explicitly requested suffix, retaining its header. */
 export async function readSavedWindow(
  first:Dataset,
  read:(offset:number)=>Promise<Dataset>,
- maxRows=1000,
+ maxRows:number|null=null,
  allowSourceError=false,
 ):Promise<Dataset> {
- if(!Number.isSafeInteger(maxRows)||maxRows<1)throw new Error('Saved data window must have a positive whole-number limit.');
+ if(maxRows!==null&&(!Number.isSafeInteger(maxRows)||maxRows<1))throw new Error('Saved data window must have a positive whole-number limit.');
  const total=first.header.row_count;
  if(!Number.isSafeInteger(total)||total<0)throw new Error('Saved dataset has an invalid row count.');
  function validate(page:Dataset,offset:number):number {
@@ -31,7 +31,7 @@ export async function readSavedWindow(
   return end;
  }
  const firstEnd=validate(first,0);
- const start=Math.max(0,total-maxRows);
+ const start=maxRows===null?0:Math.max(0,total-maxRows);
  const rows:Dataset['rows']=start<firstEnd?first.rows.slice(start):[];
  let offset=Math.max(start,firstEnd);
  while(offset<total){
@@ -43,10 +43,9 @@ export async function readSavedWindow(
  return {header:first.header,rows,next_offset:null};
 }
 
-/** Facts must be complete; unlike a price chart, dropping old rows drops metrics. */
+/** Facts retain complete snapshots, including rows from partial source results. */
 export async function readSavedFacts(first:Dataset,read:(offset:number)=>Promise<Dataset>):Promise<Dataset> {
- if(first.header.row_count>100_000)throw new Error('The financial listing exceeds the desktop limit of 100,000 observations.');
- return readSavedWindow(first,read,Math.max(1,first.header.row_count),true);
+ return readSavedWindow(first,read,null,true);
 }
 
 /** An explicit selection must resolve exactly; only an absent selection may use a default. */

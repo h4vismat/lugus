@@ -14,6 +14,8 @@ scenario = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in legacy_scenarios 
 
 if len(sys.argv) > 1 and sys.argv[1] == "--version":
     if scenario == "bad_version":
+        print("codex-cli 99.0.0")
+    elif scenario == "version_01540":
         print("codex-cli 0.154.0")
     elif scenario == "oversized_version":
         print("x" * 5000)
@@ -39,7 +41,7 @@ def rpc_result(request, result):
 
 def thread(index):
     return {
-        "cliVersion": "0.153.4", "createdAt": 1, "cwd": os.getcwd(),
+        "cliVersion": "0.154.0" if scenario == "version_01540" else "0.153.4", "createdAt": 1, "cwd": os.getcwd(),
         "ephemeral": True, "id": f"thread-{index}", "modelProvider": "test-provider",
         "preview": "", "projectId": None, "sessionId": f"session-{index}",
         "source": "appServer", "status": "idle", "turns": [], "updatedAt": 1,
@@ -203,7 +205,7 @@ def serve_session():
         validate_client_request(start, next_id, "turn/start")
         next_id += 1
         turn_id = f"turn-{thread_index}"
-        if start.get("params") != {"threadId": thread_id, "input": [{"type": "text", "text": "Review thesis A"}]}:
+        if start.get("params") != {"threadId": thread_id, "input": [{"type": "text", "text": ("x" * (9 * 1024 * 1024) if scenario == "unlimited_large" else "Review thesis A")}]}:
             send({"id": start["id"], "error": {"code": -32602, "message": "invalid turn settings"}})
             continue
         rpc_result(start, {"turn": turn(turn_id)})
@@ -272,7 +274,11 @@ def serve_session():
                 sys.exit(1)
             continue
 
-        if scenario == "multiple_messages":
+        if scenario == "unlimited_large":
+            item = {"id": "message-1", "text": "x" * (9 * 1024 * 1024), "type": "agentMessage"}
+            send({"method": "item/completed", "params": {"item": item, "threadId": thread_id, "turnId": turn_id}})
+            send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn(turn_id, "completed", [item])}})
+        elif scenario == "multiple_messages":
             send({"method": "item/agentMessage/delta", "params": {
                 "delta": "Draft response.", "itemId": "message-draft", "threadId": thread_id, "turnId": turn_id}})
             send({"method": "item/agentMessage/delta", "params": {

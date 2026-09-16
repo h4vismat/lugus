@@ -78,7 +78,14 @@ impl PreparedText {
             &extracted,
             input.dataset.created_at,
         )?;
-        check_envelope(&header, HEADER_MAX)?;
+        check_envelope(
+            &header,
+            if limits.max_text_bytes == isize::MAX as usize {
+                isize::MAX as usize
+            } else {
+                HEADER_MAX
+            },
+        )?;
         let mut chunks = Vec::new();
         let mut add = |node: i64, text: &str| -> Result<()> {
             let mut start = 0;
@@ -107,7 +114,14 @@ impl PreparedText {
         let mut nodes = Vec::with_capacity(extracted.source_nodes.len());
         for node in &extracted.source_nodes {
             add(i64::from(node.node_id), &node.text)?;
-            let path = json(&node.path, HEADER_MAX)?;
+            let path = json(
+                &node.path,
+                if limits.max_depth == isize::MAX as usize {
+                    isize::MAX as usize
+                } else {
+                    HEADER_MAX
+                },
+            )?;
             nodes.push(Node {
                 id: node.node_id,
                 bytes: node.text.len(),
@@ -130,7 +144,14 @@ impl PreparedText {
         }
         Ok(Self {
             dataset: input.dataset,
-            extractor: json(&input.extractor, HEADER_MAX)?,
+            extractor: json(
+                &input.extractor,
+                if limits.max_text_bytes == isize::MAX as usize {
+                    isize::MAX as usize
+                } else {
+                    HEADER_MAX
+                },
+            )?,
             header,
             chunks,
             nodes,

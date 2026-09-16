@@ -95,14 +95,15 @@ async fn runtime_workspace_must_exist_outside_a_repository_and_config_is_strict(
     );
 }
 #[tokio::test]
-async fn configured_runtime_has_bounded_timeout_and_reports_version_failure_as_failed_run() {
+async fn legacy_runtime_timeout_is_accepted_without_research_cap_and_version_failure_is_reported() {
     let (dir, bridge) = fixture().await;
     bridge.shutdown().await.unwrap();
     std::fs::create_dir(dir.path().join("runtime")).unwrap();
     let path = dir.path().join("desktop.json");
     for timeout in [0, 9, 601] {
         std::fs::write(&path, json!({"application_config":"application.json","runtime":{"executable":"/usr/bin/true","workspace":"runtime","timeout_secs":timeout}}).to_string()).unwrap();
-        assert!(Bridge::open(&path, false).await.is_err());
+        let opened = Bridge::open(&path, false).await.unwrap();
+        opened.shutdown().await.unwrap();
     }
     std::fs::write(&path, json!({"application_config":"application.json","runtime":{"executable":"/usr/bin/true","workspace":"runtime","timeout_secs":10}}).to_string()).unwrap();
     let bridge = Bridge::open(&path, false).await.unwrap();
@@ -132,7 +133,17 @@ async fn configured_runtime_has_bounded_timeout_and_reports_version_failure_as_f
     })
     .await
     .unwrap();
-    assert_eq!(status["error"]["kind"], "unavailable");
+    // GNU true prints a non-Codex version; BSD true may return no version output.
+    assert!(matches!(
+        status["error"]["kind"].as_str(),
+        Some("unsupported" | "unavailable")
+    ));
+    assert!(
+        status["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("CLI version")
+    );
     assert!(status["error"]["message"].as_str().is_some());
     bridge.shutdown().await.unwrap();
 }

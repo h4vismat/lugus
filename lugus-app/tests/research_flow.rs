@@ -115,6 +115,7 @@ async fn setup(
 }
 fn message(c: &Conversation, id: &str) -> SendMessageRequest {
     SendMessageRequest {
+        research_brief: None,
         company_hint: None,
         conversation_id: c.id.clone(),
         request_id: id.into(),

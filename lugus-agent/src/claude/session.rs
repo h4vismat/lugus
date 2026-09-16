@@ -110,12 +110,13 @@ impl AgentRuntime for ClaudeRuntime {
         }
         validate_request(&request)?;
         let input = json!({"context": request.context, "prompt": request.prompt}).to_string();
-        if input.len() > MAX_INPUT
-            || request.instructions.len() > MAX_INPUT
-            || serde_json::to_vec(&request.tools)
-                .map_err(|_| Error::InvalidRequest("cannot encode tool specs".into()))?
-                .len()
-                > 1024 * 1024
+        if request.limits.timeout != Duration::MAX
+            && (input.len() > MAX_INPUT
+                || request.instructions.len() > MAX_INPUT
+                || serde_json::to_vec(&request.tools)
+                    .map_err(|_| Error::InvalidRequest("cannot encode tool specs".into()))?
+                    .len()
+                    > 1024 * 1024)
         {
             return Err(Error::InvalidRequest(
                 "Claude request exceeds input limit".into(),
@@ -124,9 +125,13 @@ impl AgentRuntime for ClaudeRuntime {
         if *cancel.borrow() {
             return Ok(cancelled(&request));
         }
-        let deadline = tokio::time::Instant::now() + request.limits.timeout;
-        let mut server =
-            McpServer::start(request.tools.clone(), request.limits.max_tool_calls).await?;
+        let deadline = crate::deadline::Deadline::after(request.limits.timeout);
+        let mut server = McpServer::start_with_policy(
+            request.tools.clone(),
+            request.limits.max_tool_calls,
+            request.limits.timeout == Duration::MAX,
+        )
+        .await?;
         let mut command = Command::new(&self.config.executable);
         command
             .args(startup_args(
@@ -149,6 +154,7 @@ impl AgentRuntime for ClaudeRuntime {
         let stdout = child.stdout.take().ok_or_else(missing_pipe)?;
         let operation = async {
             emit(
+                request.limits.timeout == Duration::MAX,
                 &events,
                 RuntimeEvent::Started {
                     run_id: request.run_id.clone(),
@@ -170,7 +176,7 @@ impl AgentRuntime for ClaudeRuntime {
         let result = tokio::select! {
             biased;
             () = cancelled_signal(&mut cancel) => Ok(cancelled(&request)),
-            () = tokio::time::sleep_until(deadline) => Err(Error::Timeout),
+            () = deadline.wait() => Err(Error::Timeout),
             result = operation => result,
         };
         // kill_on_drop also covers callers dropping run() itself. No tasks hold tools.
@@ -254,7 +260,7 @@ async fn drive(
                 buffer.extend_from_slice(&chunk[..count]);
                 while let Some(offset) = buffer[scanned..].iter().position(|byte| *byte == b'\n') {
                     let end = scanned + offset;
-                    if end > MAX_FRAME { return Err(Error::FrameTooLarge { limit: MAX_FRAME }); }
+                    if request.limits.timeout != Duration::MAX && end > MAX_FRAME { return Err(Error::FrameTooLarge { limit: MAX_FRAME }); }
                     let frame = buffer.drain(..=end).collect::<Vec<_>>();
                     scanned = 0;
                     let utf8 = std::str::from_utf8(&frame).map_err(|_| Error::InvalidUtf8)?;
@@ -262,7 +268,7 @@ async fn drive(
                     if let Some(report) = process_frame(message, &mut text, request, events).await? { return Ok(report); }
                 }
                 scanned = buffer.len();
-                if buffer.len() > MAX_FRAME { return Err(Error::FrameTooLarge { limit: MAX_FRAME }); }
+                if request.limits.timeout != Duration::MAX && buffer.len() > MAX_FRAME { return Err(Error::FrameTooLarge { limit: MAX_FRAME }); }
             }
             call = server.calls.recv() => {
                 let Some(call) = call else { return Err(Error::Protocol("MCP server stopped".into())); };
@@ -295,11 +301,18 @@ async fn process_frame(
                     .pointer("/event/delta/text")
                     .and_then(Value::as_str)
                     .ok_or_else(|| Error::Protocol("Claude text delta is invalid".into()))?;
-                if text.len().saturating_add(delta.len()) > MAX_TEXT {
+                if request.limits.timeout != Duration::MAX
+                    && text.len().saturating_add(delta.len()) > MAX_TEXT
+                {
                     return Err(Error::FrameTooLarge { limit: MAX_TEXT });
                 }
                 text.push_str(delta);
-                emit(events, RuntimeEvent::TextDelta { text: delta.into() }).await?;
+                emit(
+                    request.limits.timeout == Duration::MAX,
+                    events,
+                    RuntimeEvent::TextDelta { text: delta.into() },
+                )
+                .await?;
             }
         }
         "result" => {
@@ -314,11 +327,12 @@ async fn process_frame(
                 .get("result")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::Protocol("Claude result lacks text".into()))?;
-            if result.len() > MAX_TEXT {
+            if request.limits.timeout != Duration::MAX && result.len() > MAX_TEXT {
                 return Err(Error::FrameTooLarge { limit: MAX_TEXT });
             }
             if text.is_empty() && !result.is_empty() {
                 emit(
+                    request.limits.timeout == Duration::MAX,
                     events,
                     RuntimeEvent::TextDelta {
                         text: result.into(),
@@ -340,6 +354,7 @@ async fn process_frame(
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 emit(
+                    request.limits.timeout == Duration::MAX,
                     events,
                     RuntimeEvent::Usage {
                         input_tokens,
@@ -382,6 +397,7 @@ async fn dispatch(
     } else {
         *count += 1;
         emit(
+            request.limits.timeout == Duration::MAX,
             events,
             RuntimeEvent::ToolStarted {
                 call_id: call_id.clone(),
@@ -404,6 +420,7 @@ async fn dispatch(
             };
         }
         emit(
+            request.limits.timeout == Duration::MAX,
             events,
             RuntimeEvent::ToolFinished {
                 call_id,
@@ -427,11 +444,22 @@ async fn dispatch(
         .send(json!({"content":[{"type":"text","text":content}],"isError":!result.success}));
     Ok(())
 }
-async fn emit(events: &mpsc::Sender<RuntimeEvent>, event: RuntimeEvent) -> Result<()> {
-    tokio::time::timeout(EVENT_TIMEOUT, events.send(event))
-        .await
-        .map_err(|_| Error::EventConsumerSlow)?
-        .map_err(|_| Error::EventConsumerDisconnected)
+async fn emit(
+    unlimited: bool,
+    events: &mpsc::Sender<RuntimeEvent>,
+    event: RuntimeEvent,
+) -> Result<()> {
+    tokio::time::timeout(
+        if unlimited {
+            Duration::MAX
+        } else {
+            EVENT_TIMEOUT
+        },
+        events.send(event),
+    )
+    .await
+    .map_err(|_| Error::EventConsumerSlow)?
+    .map_err(|_| Error::EventConsumerDisconnected)
 }
 async fn cancelled_signal(cancel: &mut watch::Receiver<bool>) {
     loop {

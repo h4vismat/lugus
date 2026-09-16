@@ -24,14 +24,13 @@ use crate::{
 
 const EVENT_DELIVERY_TIMEOUT: Duration = Duration::from_millis(100);
 const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
-const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 struct TurnScope<'a> {
     request: &'a RunRequest,
     thread_id: &'a str,
     turn_id: &'a str,
-    deadline: tokio::time::Instant,
+    deadline: crate::deadline::Deadline,
 }
 
 struct ActiveTurn<'a> {
@@ -125,15 +124,15 @@ impl CodexRuntime {
     }
 
     async fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
-        let deadline = tokio::time::Instant::now() + RPC_TIMEOUT;
+        let deadline = crate::deadline::Deadline::after(self.process.request_timeout());
         let id = self.take_request_id()?;
         let request = json!({"id": id, "method": method, "params": params});
-        tokio::time::timeout_at(deadline, self.process.send(&request))
+        tokio::time::timeout(deadline.remaining(), self.process.send(&request))
             .await
             .map_err(|_| Error::Timeout)??;
 
         loop {
-            let message = tokio::time::timeout_at(deadline, self.process.receive())
+            let message = tokio::time::timeout(deadline.remaining(), self.process.receive())
                 .await
                 .map_err(|_| Error::Timeout)??;
             match classify_message(message)? {
@@ -153,7 +152,7 @@ impl CodexRuntime {
                 }
                 WireMessage::Request { id, .. } => {
                     let response = method_not_found_response(id);
-                    tokio::time::timeout_at(deadline, self.process.send(&response))
+                    tokio::time::timeout(deadline.remaining(), self.process.send(&response))
                         .await
                         .map_err(|_| Error::Timeout)??;
                 }
@@ -177,7 +176,7 @@ impl CodexRuntime {
         tools: &dyn ToolExecutor,
         events: &mpsc::Sender<RuntimeEvent>,
         cancel: &mut watch::Receiver<bool>,
-        deadline: tokio::time::Instant,
+        deadline: crate::deadline::Deadline,
     ) -> Result<RunReport> {
         if *cancel.borrow() {
             return self.cancel_before_turn(request).await;
@@ -190,7 +189,7 @@ impl CodexRuntime {
             biased;
             () = wait_for_cancellation(cancel) => return self.cancel_before_turn(request).await,
             ids = self.current_mcp_server_ids() => ids?,
-            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+            () = deadline.wait() => return Err(Error::Timeout),
         };
 
         let thread_start_params = self.thread_start_params(request, &mcp_server_ids);
@@ -198,7 +197,7 @@ impl CodexRuntime {
             biased;
             () = wait_for_cancellation(cancel) => return self.cancel_before_turn(request).await,
             thread = self.rpc("thread/start", thread_start_params) => thread?,
-            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+            () = deadline.wait() => return Err(Error::Timeout),
         };
         let thread_id = response_id_at(&thread, &["thread", "id"], "thread/start")?;
 
@@ -210,7 +209,7 @@ impl CodexRuntime {
             biased;
             () = wait_for_cancellation(cancel) => return self.cancel_before_turn(request).await,
             turn = self.rpc("turn/start", turn_start_params) => turn?,
-            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+            () = deadline.wait() => return Err(Error::Timeout),
         };
         let turn_id = response_id_at(&turn, &["turn", "id"], "turn/start")?;
         if emit_event(
@@ -320,7 +319,7 @@ impl CodexRuntime {
             let message = tokio::select! {
                 message = self.process.receive() => message?,
                 () = wait_for_cancellation(cancel) => return self.interrupt_and_report(request, thread_id, turn_id).await,
-                () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+                () = deadline.wait() => return Err(Error::Timeout),
             };
             match classify_message(message)? {
                 WireMessage::Request {
@@ -378,7 +377,7 @@ impl CodexRuntime {
                                 arguments: params["arguments"].clone(),
                             }) => result,
                             () = wait_for_cancellation(cancel) => return self.interrupt_and_report(request, thread_id, turn_id).await,
-                            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+                            () = deadline.wait() => return Err(Error::Timeout),
                         }
                     } else {
                         bounded_failure(
@@ -535,7 +534,7 @@ impl CodexRuntime {
                 let _ = self.interrupt_and_report(scope.request, scope.thread_id, scope.turn_id).await;
                 Err(Error::Cancelled)
             }
-            () = tokio::time::sleep_until(scope.deadline) => Err(Error::Timeout),
+            () = scope.deadline.wait() => Err(Error::Timeout),
         }
     }
 
@@ -587,11 +586,13 @@ impl AgentRuntime for CodexRuntime {
         mut cancel: watch::Receiver<bool>,
     ) -> Result<RunReport> {
         validate_request(&request)?;
+        self.process
+            .configure_research(request.limits.timeout == Duration::MAX);
         if *cancel.borrow() {
             let _ = self.process.abort().await;
             return Ok(cancelled_report(&request));
         }
-        let deadline = tokio::time::Instant::now() + request.limits.timeout;
+        let deadline = crate::deadline::Deadline::after(request.limits.timeout);
         let result = match tokio::time::timeout(
             request.limits.timeout,
             self.run_inner(&request, tools, &events, &mut cancel, deadline),
@@ -687,22 +688,22 @@ async fn wait_for_cancellation(cancel: &mut watch::Receiver<bool>) {
 async fn emit_event(
     events: &mpsc::Sender<RuntimeEvent>,
     event: RuntimeEvent,
-    deadline: tokio::time::Instant,
+    deadline: crate::deadline::Deadline,
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<bool> {
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let remaining = deadline.remaining();
     if remaining.is_zero() {
         return Err(Error::Timeout);
     }
     tokio::select! {
-        sent = tokio::time::timeout(EVENT_DELIVERY_TIMEOUT.min(remaining), events.send(event)) => match sent {
+        sent = tokio::time::timeout(if remaining == Duration::MAX { Duration::MAX } else { EVENT_DELIVERY_TIMEOUT.min(remaining) }, events.send(event)) => match sent {
             Ok(Ok(())) => Ok(false),
             Ok(Err(_)) => Err(Error::EventConsumerDisconnected),
-            Err(_) if tokio::time::Instant::now() >= deadline => Err(Error::Timeout),
+            Err(_) if deadline.expired() => Err(Error::Timeout),
             Err(_) => Err(Error::EventConsumerSlow),
         },
         () = wait_for_cancellation(cancel) => Ok(true),
-        () = tokio::time::sleep_until(deadline) => Err(Error::Timeout),
+        () = deadline.wait() => Err(Error::Timeout),
     }
 }
 

@@ -1,13 +1,12 @@
 //! Immutable runtime profiles. Renderer commands select identities, never executables.
 use lugus_agent::{
-    AgentRuntime, RunReport, RunRequest, RuntimeEvent, ToolExecutor,
+    AgentRuntime,
     claude::{ClaudeConfig, ClaudeRuntime},
     codex::{CodexConfig, CodexRuntime},
 };
 use lugus_app::{AppError, ErrorKind, Result, conversations::RuntimeFactory};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,21 +43,16 @@ pub(crate) struct RuntimeConfig {
     pub workspace: PathBuf,
     pub model: Option<String>,
     pub model_provider: Option<String>,
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
-}
-fn default_timeout() -> u64 {
-    180
+    #[serde(default, rename = "timeout_secs")]
+    pub _timeout_secs: u64,
 }
 #[derive(Clone)]
 pub(crate) struct Profile {
     pub kind: AgentKind,
+    pub allow_web_search: bool,
     config: RuntimeConfig,
 }
 impl Profile {
-    pub fn timeout_secs(&self) -> u64 {
-        self.config.timeout_secs
-    }
     pub fn resolve(kind: AgentKind, mut config: RuntimeConfig, base: &Path) -> Result<Self> {
         let invalid = || {
             AppError::new(
@@ -67,13 +61,6 @@ impl Profile {
                 false,
             )
         };
-        if !(10..=600).contains(&config.timeout_secs) {
-            return Err(AppError::new(
-                ErrorKind::InvalidInput,
-                "runtime timeout_secs must be between 10 and 600",
-                false,
-            ));
-        }
         if config.executable.as_os_str().is_empty() || config.workspace.as_os_str().is_empty() {
             return Err(invalid());
         }
@@ -109,13 +96,20 @@ impl Profile {
                 false,
             ));
         }
-        Ok(Self { kind, config })
+        Ok(Self {
+            kind,
+            config,
+            allow_web_search: false,
+        })
     }
 }
 #[async_trait::async_trait]
 impl RuntimeFactory for Profile {
+    fn web_search(&self) -> Option<bool> {
+        Some(self.allow_web_search)
+    }
     fn run_timeout(&self) -> Option<std::time::Duration> {
-        Some(std::time::Duration::from_secs(self.config.timeout_secs))
+        None
     }
     async fn create(&self) -> Result<Box<dyn AgentRuntime>> {
         let config = &self.config;
@@ -138,35 +132,17 @@ impl RuntimeFactory for Profile {
         };
         let runtime = runtime.map_err(|e| {
             AppError::new(
-                ErrorKind::Unavailable,
+                match &e {
+                    lugus_agent::Error::Configuration(_) => ErrorKind::Unsupported,
+                    lugus_agent::Error::AuthenticationRequired => ErrorKind::AuthenticationRequired,
+                    lugus_agent::Error::NeedsAttention(_) => ErrorKind::NeedsAttention,
+                    _ => ErrorKind::Unavailable,
+                },
                 format!("{} unavailable: {e}", self.kind.label()),
                 false,
             )
         })?;
-        Ok(Box::new(DesktopRuntime {
-            runtime,
-            timeout: std::time::Duration::from_secs(config.timeout_secs),
-        }))
-    }
-}
-struct DesktopRuntime {
-    runtime: Box<dyn AgentRuntime>,
-    timeout: std::time::Duration,
-}
-#[async_trait::async_trait]
-impl AgentRuntime for DesktopRuntime {
-    async fn run(
-        &mut self,
-        mut request: RunRequest,
-        tools: &dyn ToolExecutor,
-        events: mpsc::Sender<RuntimeEvent>,
-        cancel: watch::Receiver<bool>,
-    ) -> lugus_agent::Result<RunReport> {
-        request.limits.timeout = request.limits.timeout.min(self.timeout);
-        self.runtime.run(request, tools, events, cancel).await
-    }
-    async fn close(&mut self) -> lugus_agent::Result<()> {
-        self.runtime.close().await
+        Ok(runtime)
     }
 }
 /// Discovery never runs executables or reads CLI account configuration.
@@ -192,6 +168,6 @@ pub(crate) fn discover(kind: AgentKind, workspace: &Path) -> Option<RuntimeConfi
         workspace: workspace.to_owned(),
         model: None,
         model_provider: None,
-        timeout_secs: default_timeout(),
+        _timeout_secs: 0,
     })
 }

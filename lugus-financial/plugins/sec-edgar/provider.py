@@ -155,7 +155,8 @@ class SafeRedirect(HTTPRedirectHandler):
 
 class HttpTransport:
     """Shared per-process limiter: at most two starts/second, three attempts."""
-    def __init__(self,user_agent,opener_factory=None,sleep=time.sleep,monotonic=time.monotonic):
+    def __init__(self,user_agent,opener_factory=None,sleep=time.sleep,monotonic=time.monotonic,unlimited_research=False):
+        self.unlimited_research=unlimited_research
         self.user_agent=user_agent
         self.opener_factory=opener_factory or self.edgar_opener
         self.sleep,self.monotonic=sleep,monotonic
@@ -174,24 +175,24 @@ class HttpTransport:
         remaining=self.blocked_until-self.monotonic()
         if remaining>0:
             raise ProviderError(self.blocked_kind,'SEC is cooling down; retry after the indicated delay',retry_after_seconds=math.ceil(remaining))
-        deadline=self.monotonic()+40
+        deadline=None if self.unlimited_research else self.monotonic()+40
         for attempt in range(3):
             self.wait_turn()
-            if self.monotonic()>=deadline:
+            if deadline is not None and self.monotonic()>=deadline:
                 raise ProviderError('timeout','SEC request deadline exceeded before request')
             try:
                 request=Request(url,headers={'User-Agent':self.user_agent,'Accept-Encoding':'identity'})
-                with self.opener_factory(archive).open(request,timeout=min(10,max(0.1,deadline-self.monotonic()))) as response:
+                with self.opener_factory(archive).open(request,timeout=None if deadline is None else min(10,max(0.1,deadline-self.monotonic()))) as response:
                     validate_url(response.geturl(),archive)
                     length=response.headers.get('Content-Length')
-                    if length and int(length)>max_bytes: raise ProviderError('malformed_data','Source exceeds byte limit')
+                    if max_bytes is not None and length and int(length)>max_bytes: raise ProviderError('malformed_data','Source exceeds byte limit')
                     chunks=[]; size=0
                     while True:
-                        if self.monotonic()>deadline: raise ProviderError('timeout','Source deadline exceeded')
-                        chunk=response.read(min(65536,max_bytes+1-size))
+                        if deadline is not None and self.monotonic()>deadline: raise ProviderError('timeout','Source deadline exceeded')
+                        chunk=response.read(65536 if max_bytes is None else min(65536,max_bytes+1-size))
                         if not chunk: break
                         size+=len(chunk)
-                        if size>max_bytes: raise ProviderError('malformed_data','Source exceeds byte limit')
+                        if max_bytes is not None and size>max_bytes: raise ProviderError('malformed_data','Source exceeds byte limit')
                         chunks.append(chunk)
                     if length and size!=int(length): raise ProviderError('malformed_data','Truncated source response')
                     return b''.join(chunks),response.headers.get_content_type()
@@ -215,7 +216,7 @@ class HttpTransport:
             except ValueError as exc:
                 raise ProviderError('malformed_data','Invalid HTTP metadata') from exc
             delay=retry if retry is not None else 2**attempt
-            if not transient or attempt==2 or delay>10 or self.monotonic()+delay>=deadline:
+            if not transient or attempt==2 or delay>10 or (deadline is not None and self.monotonic()+delay>=deadline):
                 if transient and (error.kind=='rate_limited' or retry is not None):
                     cooldown=max(retry or 0,60 if error.kind=='rate_limited' else 5)
                     self.blocked_until=self.monotonic()+cooldown
@@ -228,6 +229,7 @@ class HttpTransport:
 class Provider:
     def __init__(self,transport=None,clock=utc_now):
         self.transport=transport; self.injected_transport=transport is not None
+        self.unlimited_research=False
         self.clock=clock; self.initialized=False; self.sessions={}; self.resolution=None
     def call(self,method,params):
         if not isinstance(params,dict): raise invalid('Params must be an object')
@@ -236,11 +238,15 @@ class Provider:
             config=params.get('config',{})
             agent=config.get('user_agent') if isinstance(config,dict) else None
             if not isinstance(agent,str) or not 5<len(agent)<512 or not re.search(r'[^\s@]+@[^\s@]+\.[^\s@]+',agent) or any(ord(c)<32 or ord(c)>126 for c in agent): raise ProviderError('configuration','An identifying User-Agent with contact email is required')
+            unlimited=config.get('unlimited_research',False)
+            if type(unlimited) is not bool: raise ProviderError('configuration','unlimited_research must be a boolean')
+            self.unlimited_research=unlimited
             if not self.injected_transport:
                 if self.transport is None: self.transport=HttpTransport(agent)
                 else: self.transport.user_agent=agent
+            if isinstance(self.transport,HttpTransport): self.transport.unlimited_research=unlimited
             from resolution import Resolution
-            self.resolution=Resolution(self.transport,self.clock)
+            self.resolution=Resolution(self.transport,self.clock,unlimited_research=unlimited)
             self.sessions.clear(); self.initialized=True
             return {'protocol_version':1,'plugin_id':'sec-edgar','plugin_version':'0.3.0','capabilities':{'filings':1,'fundamentals':1,'company_resolution':1}}
         if method not in ('filings.list','fundamentals.facts','filings.document','company_resolution.search','company_resolution.lookup'): raise ProviderError('unsupported','Method not found',-32601)
@@ -249,10 +255,10 @@ class Provider:
         if method=='company_resolution.lookup': return self.resolution.lookup(params)
         if method=='filings.document':
             url=validate_url(params.get('source_url'),True)
-            maximum=params.get('max_bytes',MAX_DOCUMENT)
-            if type(maximum) is not int or not 1<=maximum<=MAX_DOCUMENT: raise invalid('Invalid document byte limit')
+            maximum=params.get('max_bytes',None if self.unlimited_research else MAX_DOCUMENT)
+            if not (self.unlimited_research and maximum is None) and (type(maximum) is not int or maximum<1 or (not self.unlimited_research and maximum>MAX_DOCUMENT)): raise invalid('Invalid document byte limit')
             content,media=self.transport.get(url,maximum,archive=True)
-            if len(content)>maximum: raise ProviderError('malformed_data','Document exceeds byte limit')
+            if maximum is not None and len(content)>maximum: raise ProviderError('malformed_data','Document exceeds byte limit')
             return dict(source_url=url,media_type=media,content_base64=base64.b64encode(content).decode('ascii'),retrieved_at=self.clock())
         query=query_params(params)
         key=json.dumps([method,{k:v for k,v in query.items() if k!='cursor'}],sort_keys=True)
@@ -266,17 +272,17 @@ class Provider:
             cik=query['company']['value']; stamp=self.clock()
             if method=='fundamentals.facts':
                 url=f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json'
-                raw,_=self.transport.get(url,MAX_SOURCE)
+                raw,_=self.transport.get(url,None if self.unlimited_research else MAX_SOURCE)
                 items=decode_facts(parse_json(raw),query,url,stamp)
             else:
                 url=f'https://data.sec.gov/submissions/CIK{cik}.json'
-                raw,_=self.transport.get(url,MAX_SOURCE)
+                raw,_=self.transport.get(url,None if self.unlimited_research else MAX_SOURCE)
                 payload=parse_json(raw)
                 try:
                     if int(payload['cik'])!=int(cik): raise ValueError('Company mismatch')
                     items=decode_filings(payload['filings']['recent'],query,stamp)
                     files=payload['filings']['files']
-                    if not isinstance(files,list) or len(files)>1000: raise ValueError('Invalid historical file list')
+                    if not isinstance(files,list) or (not self.unlimited_research and len(files)>1000): raise ValueError('Invalid historical file list')
                     total=len(raw)
                     for file in files:
                         start,end=day(file['filingFrom']),day(file['filingTo'])
@@ -284,9 +290,9 @@ class Provider:
                         if start>query['filed_to'] or end<query['filed_from']: continue
                         name=file['name']
                         if not isinstance(name,str) or not re.fullmatch(r'CIK'+cik+r'-submissions-\d+\.json',name): raise ValueError('Invalid history name')
-                        raw,_=self.transport.get('https://data.sec.gov/submissions/'+name,MAX_SOURCE-total)
+                        raw,_=self.transport.get('https://data.sec.gov/submissions/'+name,None if self.unlimited_research else MAX_SOURCE-total)
                         total+=len(raw)
-                        if total>MAX_SOURCE: raise ProviderError('malformed_data','Submissions exceed session size limit')
+                        if not self.unlimited_research and total>MAX_SOURCE: raise ProviderError('malformed_data','Submissions exceed session size limit')
                         items.extend(decode_filings(parse_json(raw),query,stamp))
                 except (KeyError,TypeError,ValueError) as exc: raise ProviderError('malformed_data','Invalid submissions index') from exc
             offset=0

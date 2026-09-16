@@ -66,7 +66,7 @@ def number(value):
     return result
 
 
-def normalize_rows(rows, metadata, query, retrieved_at):
+def normalize_rows(rows, metadata, query, retrieved_at, unlimited_research=False):
     """Normalize typed row mappings without dataframe-wide float coercion."""
     try:
         currency, zone = metadata['currency'], metadata['exchangeTimezoneName']
@@ -76,7 +76,7 @@ def normalize_rows(rows, metadata, query, retrieved_at):
         items, seen, size = [], set(), 0
         url = 'https://finance.yahoo.com/quote/' + quote(query['instrument']['value'], safe='') + '/history/'
         for row in rows:
-            if len(items) >= MAX_ROWS:
+            if not unlimited_research and len(items) >= MAX_ROWS:
                 raise ValueError('Snapshot exceeds row limit')
             timestamp = row['Date']
             if not isinstance(timestamp, datetime) or timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -105,7 +105,7 @@ def normalize_rows(rows, metadata, query, retrieved_at):
                         currency=currency, exchange_timezone=zone, price_basis='source_reported',
                         precision='binary_float_source', source_url=url, retrieved_at=retrieved_at)
             size += len(json.dumps(item, separators=(',',':')).encode('utf-8'))
-            if size > MAX_SNAPSHOT_BYTES:
+            if not unlimited_research and size > MAX_SNAPSHOT_BYTES:
                 raise ValueError('Snapshot exceeds byte limit')
             items.append(item)
         if not items:
@@ -115,13 +115,13 @@ def normalize_rows(rows, metadata, query, retrieved_at):
         raise ProviderError('malformed_data', str(exc)) from exc
 
 
-def frame_rows(frame):
+def frame_rows(frame, unlimited_research=False):
     """itertuples preserves an integer Volume column beyond binary float precision."""
     try:
         columns = list(frame.columns)
         if len(set(columns)) != len(columns) or not {'Open','High','Low','Close','Volume'} <= set(columns):
             raise ValueError('Missing or duplicate source columns')
-        if len(frame) > MAX_ROWS:
+        if not unlimited_research and len(frame) > MAX_ROWS:
             raise ValueError('Snapshot exceeds row limit')
         return [dict(zip(['Date'] + columns, values)) for values in frame.itertuples(index=True, name=None)]
     except (TypeError, ValueError, AttributeError) as exc:
@@ -142,7 +142,8 @@ def fetch_history(symbol, options):
         cache.mkdir(exist_ok=True)
         yf.set_tz_cache_location(str(cache))
         yf.config.debug.hide_exceptions = False
-        ticker = yf.Ticker(symbol)
+        from transport import ticker_for_research
+        ticker = ticker_for_research(yf, symbol, options.get('timeout',10) is None)
         frame = ticker.history(**options)
         if frame.empty:
             raise ProviderError('not_found', 'Source returned no prices; calendar coverage is unknown')
@@ -151,7 +152,7 @@ def fetch_history(symbol, options):
         metadata = ticker.get_history_metadata()
         keys = ('currency','exchangeTimezoneName','exchangeName','symbol') if options.get('actions') else ('currency','exchangeTimezoneName')
         source_metadata = {key: metadata.get(key) for key in keys}
-        return frame_rows(frame), source_metadata
+        return frame_rows(frame, unlimited_research=options.get('timeout',10) is None), source_metadata
     except ProviderError:
         raise
     except YFRateLimitError as exc:
@@ -174,6 +175,7 @@ class Provider:
         self.fetch, self.clock = fetch, clock
         self.fetch_metadata = fetch_metadata
         self.recovery = recovery if recovery is not None else Recovery()
+        self.unlimited_research = False
         self.initialized = False
         self.snapshot = None
         self.next_cursor = None
@@ -185,11 +187,14 @@ class Provider:
         self.snapshot, self.next_cursor = None, None
         if not isinstance(params, dict) or type(params.get('protocol_version')) is not int or params['protocol_version'] != 1:
             raise ProviderError('unsupported', 'Expected protocol version 1')
-        if params.get('config') != {}:
-            raise ProviderError('configuration', 'Yfinance configuration must be an empty object')
+        config = params.get('config')
+        if not isinstance(config,dict) or set(config)-{'unlimited_research'} or type(config.get('unlimited_research',False)) is not bool:
+            raise ProviderError('configuration', 'Expected optional boolean unlimited_research configuration')
+        self.unlimited_research = config.get('unlimited_research',False)
+        self.recovery.unlimited_research = self.unlimited_research
         self.initialized = True
         from history import HistoricalProvider
-        self.historical = HistoricalProvider(self.fetch, self.clock, self.recovery)
+        self.historical = HistoricalProvider(self.fetch, self.clock, self.recovery, unlimited_research=self.unlimited_research)
         return dict(protocol_version=1,plugin_id='yfinance',plugin_version='0.3.0',capabilities={'market_data':1, 'instrument_lookup':1, 'historical_prices':1})
 
     def historical_daily(self, params):
@@ -202,7 +207,7 @@ class Provider:
             raise ProviderError('configuration', 'Initialize the provider first')
         query = lookup_params(params)
         with redirect_stdout(sys.stderr):
-            source = self.recovery.run(lambda: self.fetch_metadata(query['instrument']['value']))
+            source = self.recovery.run(lambda: self.fetch_metadata(query['instrument']['value'], unlimited_research=True) if self.unlimited_research and self.fetch_metadata is fetch_metadata else self.fetch_metadata(query['instrument']['value']))
         return project_metadata(source, query, self.clock())
 
     def daily(self, params):
@@ -213,10 +218,10 @@ class Provider:
         if cursor is None:
             self.snapshot, self.next_cursor, self.offset = None, None, 0
             options = dict(interval='1d',start=query['start'],end=(date.fromisoformat(query['end'])+timedelta(days=1)).isoformat(),
-                           auto_adjust=False,back_adjust=False,repair=False,rounding=False,actions=False,keepna=True,timeout=10)
+                           auto_adjust=False,back_adjust=False,repair=False,rounding=False,actions=False,keepna=True,timeout=None if self.unlimited_research else 10)
             with redirect_stdout(sys.stderr):
                 rows, metadata = self.recovery.run(lambda: self.fetch(query['instrument']['value'], options))
-            items = normalize_rows(rows, metadata, query, self.clock())
+            items = normalize_rows(rows, metadata, query, self.clock(), unlimited_research=self.unlimited_research)
             self.snapshot = (query, items)
         elif self.snapshot is None or cursor != self.next_cursor or query != self.snapshot[0]:
             raise invalid('Expired cursor or cursor does not match the complete query')

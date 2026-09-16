@@ -441,3 +441,38 @@ fn empty_source_response_still_requires_json_array_envelope() {
         vec![]
     );
 }
+
+#[test]
+fn unlimited_research_extracts_deep_documents_without_changing_bounded_defaults() {
+    let html = format!("{}evidence{}", "<div>".repeat(300), "</div>".repeat(300));
+    let cancel = AtomicBool::new(false);
+    assert!(
+        extract_html(
+            html.as_bytes(),
+            "text/html",
+            &TextLimits::default(),
+            &cancel
+        )
+        .is_err()
+    );
+    let limits = TextLimits::unlimited_research();
+    let extracted = extract_html(html.as_bytes(), "text/html", &limits, &cancel).unwrap();
+    assert_eq!(extracted.text, "evidence");
+    assert!(extracted.source_nodes[0].path.len() > 256);
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        extract_html(html.as_bytes(), "text/html", &limits, &cancel)
+            .unwrap_err()
+            .kind,
+        ErrorKind::Cancelled
+    );
+}
+
+#[test]
+fn unlimited_research_accepts_large_extraction_metadata() {
+    let mut extracted = extract(b"<p>evidence</p>");
+    extracted.limitations.push("x".repeat(70_000));
+    let cancel = AtomicBool::new(false);
+    assert!(validate_extracted(&extracted, &TextLimits::default(), &cancel).is_err());
+    validate_extracted(&extracted, &TextLimits::unlimited_research(), &cancel).unwrap();
+}

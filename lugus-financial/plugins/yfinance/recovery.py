@@ -22,7 +22,8 @@ def retry_delay(error, attempt, remaining, jitter):
 
 class Recovery:
     def __init__(self, sleep=time.sleep, monotonic=time.monotonic,
-                 jitter=lambda: random.uniform(0, 0.5)):
+                 jitter=lambda: random.uniform(0, 0.5), unlimited_research=False):
+        self.unlimited_research = unlimited_research
         self.sleep, self.monotonic, self.jitter = sleep, monotonic, jitter
         self.blocked_until = 0
         self.blocked_kind = 'unavailable'
@@ -32,15 +33,15 @@ class Recovery:
         if remaining > 0:
             raise ProviderError(self.blocked_kind, 'Source is cooling down; retry after the indicated delay',
                                 retry_after_seconds=math.ceil(remaining))
-        deadline = self.monotonic() + 35
+        deadline = None if self.unlimited_research else self.monotonic() + 35
         for attempt in range(3):
             try:
                 return operation()
             except ProviderError as error:
-                delay = retry_delay(error, attempt, deadline - self.monotonic(), self.jitter())
+                delay = retry_delay(error, attempt, float('inf') if deadline is None else deadline - self.monotonic(), self.jitter())
                 if delay is not None:
                     self.sleep(delay)
-                    if self.monotonic() + 10 < deadline:
+                    if deadline is None or self.monotonic() + 10 < deadline:
                         continue
                 if error.kind in ('rate_limited', 'timeout', 'unavailable'):
                     cooldown = max(error.retry_after_seconds or 0,

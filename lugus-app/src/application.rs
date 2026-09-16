@@ -161,6 +161,10 @@ impl Application {
         bounds: HostBounds,
         ids: Box<dyn IdSource>,
     ) -> Result<Self> {
+        let mut text_options = TextPreparationOptions::default();
+        if limits.max_document_bytes == isize::MAX as usize {
+            text_options.limits = crate::passages::TextLimits::unlimited_research();
+        }
         Self::start_with_text_options(
             providers,
             repositories,
@@ -168,7 +172,7 @@ impl Application {
             limits,
             bounds,
             ids,
-            TextPreparationOptions::default(),
+            text_options,
         )
         .await
     }

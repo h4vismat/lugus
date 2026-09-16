@@ -94,6 +94,7 @@ async fn changing_selection_during_interpretation_only_affects_the_next_message(
     .unwrap();
     let chat = host.create("create", "Agent selection").await.unwrap();
     let request = |id: &str| SendMessageRequest {
+        research_brief: None,
         conversation_id: chat.id.clone(),
         request_id: id.into(),
         text: "Hello".into(),

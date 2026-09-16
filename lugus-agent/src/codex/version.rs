@@ -6,7 +6,7 @@ use tokio::process::Command;
 
 use crate::{Error, Result};
 
-const SUPPORTED_VERSION: &str = "0.153.4";
+const SUPPORTED_VERSIONS: &[&str] = &["0.153.4", "0.154.0"];
 const OUTPUT_LIMIT: usize = 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -57,9 +57,10 @@ fn validate_output(output: &[u8]) -> Result<()> {
         .split_whitespace()
         .last()
         .ok_or_else(|| Error::Process("Codex version output is empty".into()))?;
-    if version != SUPPORTED_VERSION {
+    if !SUPPORTED_VERSIONS.contains(&version) {
         return Err(Error::Configuration(format!(
-            "unsupported Codex version {version}; expected {SUPPORTED_VERSION}"
+            "unsupported Codex version {version}; expected {}",
+            SUPPORTED_VERSIONS.join(" or ")
         )));
     }
     Ok(())

@@ -40,7 +40,11 @@ impl Drop for McpServer {
     }
 }
 impl McpServer {
-    pub async fn start(tools: Vec<ToolSpec>, max_calls: usize) -> Result<Self> {
+    pub async fn start_with_policy(
+        tools: Vec<ToolSpec>,
+        max_calls: usize,
+        unlimited: bool,
+    ) -> Result<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(io_error)?;
@@ -62,7 +66,12 @@ impl McpServer {
             tools,
             sender,
             requests: AtomicUsize::new(0),
-            max_requests: max_calls.saturating_add(256).min(10_000),
+            max_requests: if unlimited {
+                isize::MAX as usize
+            } else {
+                max_calls.saturating_add(256).min(10_000)
+            },
+            unlimited,
         });
         let task = tokio::spawn(async move {
             // Dropping this owner aborts every connection, including handlers awaiting a tool.
@@ -76,7 +85,7 @@ impl McpServer {
                         connections.spawn(async move {
                             let service = service_fn(move |request| handle(request, state.clone()));
                             let connection = hyper::server::conn::http1::Builder::new().max_buf_size(32 * 1024).serve_connection(TokioIo::new(stream), service);
-                            let _ = tokio::time::timeout(Duration::from_secs(300), connection).await;
+                            let _ = tokio::time::timeout(if unlimited { Duration::MAX } else { Duration::from_secs(300) }, connection).await;
                         });
                     }
                     _ = connections.join_next(), if !connections.is_empty() => {}
@@ -100,6 +109,7 @@ struct State {
     sender: mpsc::Sender<Invocation>,
     requests: AtomicUsize,
     max_requests: usize,
+    unlimited: bool,
 }
 type HttpResponse = Response<Full<Bytes>>;
 fn response(status: StatusCode, value: Option<Value>) -> HttpResponse {
@@ -155,8 +165,20 @@ async fn handle_inner(request: Request<Incoming>, state: Arc<State>) -> HttpResp
         return response(StatusCode::UNSUPPORTED_MEDIA_TYPE, None);
     }
     let body = match tokio::time::timeout(
-        Duration::from_secs(5),
-        Limited::new(request.into_body(), MAX_BODY).collect(),
+        if state.unlimited {
+            Duration::MAX
+        } else {
+            Duration::from_secs(5)
+        },
+        Limited::new(
+            request.into_body(),
+            if state.unlimited {
+                isize::MAX as usize
+            } else {
+                MAX_BODY
+            },
+        )
+        .collect(),
     )
     .await
     {

@@ -43,13 +43,13 @@ def reverse_split_factor(day, splits, anchor):
         ctx.prec=80
         return Decimal(ratio.numerator)/Decimal(ratio.denominator)
 
-def normalize_history(rows, metadata, query, retrieved_at, calendar_rows):
+def normalize_history(rows, metadata, query, retrieved_at, calendar_rows, unlimited_research=False):
     try:
         if metadata['currency']!='USD' or metadata['exchangeTimezoneName']!='America/New_York':
             raise ProviderError('unsupported','Historical prices require supported USD exchange evidence')
         anchor=date.fromisoformat(query['anchor'])
         now=datetime.fromisoformat(retrieved_at)
-        if not now.tzinfo or not calendar_rows or len(calendar_rows)>MAX_ROWS or len(rows)>MAX_ROWS:
+        if not now.tzinfo or not calendar_rows or (not unlimited_research and (len(calendar_rows)>MAX_ROWS or len(rows)>MAX_ROWS)):
             raise ValueError('Invalid calendar or source snapshot')
         by_date={}; splits=[]
         for row in rows:
@@ -99,7 +99,7 @@ def normalize_history(rows, metadata, query, retrieved_at, calendar_rows):
             source_basis='total_return_index' if benchmark else 'yahoo_split_adjusted_close',
             completeness='unverified',retrieved_at=retrieved_at)
         result=dict(manifest=manifest,items=items)
-        if len(json.dumps(result,separators=(',',':')).encode())>MAX_BYTES:
+        if not unlimited_research and len(json.dumps(result,separators=(',',':')).encode())>MAX_BYTES:
             raise ValueError('Historical snapshot exceeds byte limit')
         return result
     except ProviderError:
@@ -107,7 +107,7 @@ def normalize_history(rows, metadata, query, retrieved_at, calendar_rows):
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         raise ProviderError('malformed_data',str(exc)) from exc
 
-def history_params(params):
+def history_params(params, unlimited_research=False):
     from instruments import lookup_params
     try:
         if not isinstance(params,dict) or set(params)-{'instrument','start','end','anchor','cursor','page_size'}:
@@ -118,7 +118,7 @@ def history_params(params):
             if not isinstance(params[key],str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',params[key]):
                 raise ValueError('Expected ISO historical dates')
             dates.append(date.fromisoformat(params[key]))
-        if not dates[0]<=dates[1]<=dates[2] or (dates[2]-dates[0]).days>=MAX_ROWS:
+        if not dates[0]<=dates[1]<=dates[2] or (not unlimited_research and (dates[2]-dates[0]).days>=MAX_ROWS):
             raise ValueError('Invalid historical range')
         size=params.get('page_size',200)
         if type(size) is not int or not 1<=size<=200:
@@ -131,12 +131,13 @@ def history_params(params):
         raise ProviderError('invalid_request',str(exc),-32602) from exc
 
 class HistoricalProvider:
-    def __init__(self,fetch,clock,recovery,calendar=session_days):
+    def __init__(self,fetch,clock,recovery,calendar=session_days,unlimited_research=False):
+        self.unlimited_research=unlimited_research
         self.fetch,self.clock,self.recovery,self.calendar=fetch,clock,recovery,calendar
         self.snapshot=None; self.next_cursor=None; self.offset=0
 
     def daily(self,params):
-        query=history_params(params); cursor=query.pop('cursor')
+        query=history_params(params,unlimited_research=self.unlimited_research); cursor=query.pop('cursor')
         if cursor is None:
             self.snapshot=None; self.next_cursor=None; self.offset=0
             at=self.clock()
@@ -145,7 +146,7 @@ class HistoricalProvider:
             # Both supported calendars determine the earliest possible required baseline.
             start=min(previous_session(name,query['start']) for name in ('NYSE','NASDAQ'))
             options=dict(interval='1d',start=start,end=(date.fromisoformat(query['anchor'])+timedelta(days=1)).isoformat(),
-                auto_adjust=False,back_adjust=False,repair=False,rounding=False,actions=True,keepna=True,timeout=10)
+                auto_adjust=False,back_adjust=False,repair=False,rounding=False,actions=True,keepna=True,timeout=None if self.unlimited_research else 10)
             with redirect_stdout(sys.stderr):
                 raw,metadata=self.recovery.run(lambda:self.fetch(query['instrument']['value'],options))
             at=self.clock()
@@ -154,7 +155,8 @@ class HistoricalProvider:
             if metadata.get('symbol')!=query['instrument']['value']:
                 raise ProviderError('malformed_data','Historical source symbol mismatch')
             metadata=dict(metadata,calendar=calendar_name(metadata,query['instrument']['value']))
-            calendar_rows=self.calendar(metadata['calendar'],query['start'],query['anchor'],at)
+            calendar_options={'unlimited_research':True} if self.unlimited_research and self.calendar is session_days else {}
+            calendar_rows=self.calendar(metadata['calendar'],query['start'],query['anchor'],at,**calendar_options)
             rows=[]
             for item in raw:
                 try:
@@ -173,7 +175,7 @@ class HistoricalProvider:
                     rows.append(dict(date=day,close=close,split=str(split),unsupported_action=unsupported))
                 except (KeyError,TypeError,ValueError) as exc:
                     raise ProviderError('malformed_data','Incomplete historical source frame') from exc
-            self.snapshot=(query,normalize_history(rows,metadata,query,at,calendar_rows))
+            self.snapshot=(query,normalize_history(rows,metadata,query,at,calendar_rows,unlimited_research=self.unlimited_research))
         elif self.snapshot is None or cursor!=self.next_cursor or query!=self.snapshot[0]:
             raise ProviderError('invalid_request','Expired or mismatched history cursor',-32602)
         snapshot=self.snapshot[1]

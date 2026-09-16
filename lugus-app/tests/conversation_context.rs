@@ -228,6 +228,7 @@ fn selected_reference_request_rejects_untrusted_payload_and_bad_ids() {
     );
     let limits = ConversationLimits::default();
     let request = SendMessageRequest {
+        research_brief: None,
         company_hint: None,
         conversation_id: "c".into(),
         request_id: "req".into(),
@@ -237,6 +238,7 @@ fn selected_reference_request_rejects_untrusted_payload_and_bad_ids() {
     assert!(request.validate(&limits).is_ok());
     for id in ["", "bad\nid"] {
         let invalid = SendMessageRequest {
+            research_brief: None,
             company_hint: None,
             conversation_id: id.into(),
             ..request.clone()
@@ -534,6 +536,7 @@ fn optional_company_hint_preserves_legacy_wire_shape_and_rejects_invalid_text() 
         "é".repeat(129),
     ] {
         let invalid = SendMessageRequest {
+            research_brief: None,
             company_hint: Some(hint),
             ..request.clone()
         };
@@ -543,6 +546,7 @@ fn optional_company_hint_preserves_legacy_wire_shape_and_rejects_invalid_text() 
         );
     }
     let hinted = SendMessageRequest {
+        research_brief: None,
         company_hint: Some("é".repeat(128)),
         ..request
     };

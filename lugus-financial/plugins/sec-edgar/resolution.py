@@ -89,9 +89,9 @@ def listing(ticker, exchange):
         exchange = {'namespace': 'sec:exchange', 'value': bounded_text(exchange, 128)}
     return {'ticker': {'namespace': 'sec:ticker', 'value': ticker}, 'exchange': exchange}
 
-def candidate(cik_value, name, listings, url, checksum, stamp):
+def candidate(cik_value, name, listings, url, checksum, stamp, unlimited_research=False):
     unique = {json.dumps(item, sort_keys=True): item for item in listings}
-    if len(unique) > 1000:
+    if not unlimited_research and len(unique) > 1000:
         raise ValueError('Too many listing associations')
     return {'identifier': {'namespace': 'sec:cik', 'value': cik_value},
             'name': bounded_text(name, 1024), 'aliases': [],
@@ -99,7 +99,7 @@ def candidate(cik_value, name, listings, url, checksum, stamp):
             'source_url': url, 'source_checksum': checksum, 'retrieved_at': stamp,
             'match_reasons': []}
 
-def decode_directory(payload, checksum, stamp):
+def decode_directory(payload, checksum, stamp, unlimited_research=False):
     try:
         fields, rows = payload['fields'], payload['data']
         if not isinstance(fields, list) or any(not isinstance(field, str) for field in fields) or len(set(fields)) != len(fields):
@@ -119,19 +119,19 @@ def decode_directory(payload, checksum, stamp):
             if grouped[key][0] != name:
                 raise ValueError('Inconsistent names for the same CIK in directory snapshot')
             grouped[key][1].append(association)
-        return [candidate(key, name, listings, DIRECTORY_URL, checksum, stamp)
+        return [candidate(key, name, listings, DIRECTORY_URL, checksum, stamp, unlimited_research=unlimited_research)
                 for key, (name, listings) in grouped.items()]
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise ProviderError('malformed_data', 'Invalid SEC company directory') from exc
 
-def decode_lookup(payload, expected, url, checksum, stamp):
+def decode_lookup(payload, expected, url, checksum, stamp, unlimited_research=False):
     try:
         if source_cik(payload['cik']) != expected:
             raise ValueError('Lookup CIK mismatch')
         tickers, exchanges = payload['tickers'], payload['exchanges']
         if not isinstance(tickers, list) or not isinstance(exchanges, list) or len(tickers) != len(exchanges):
             raise ValueError('Mismatched listing arrays')
-        return candidate(expected, payload['name'], [listing(t, e) for t, e in zip(tickers, exchanges)], url, checksum, stamp)
+        return candidate(expected, payload['name'], [listing(t, e) for t, e in zip(tickers, exchanges)], url, checksum, stamp, unlimited_research=unlimited_research)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise ProviderError('malformed_data', 'Invalid SEC lookup payload') from exc
 
@@ -157,13 +157,14 @@ def match_candidates(items, query):
     return sorted(result, key=lambda item: (item['match_reasons'] == ['name_substring'], normalized_name(item['name']), item['identifier']['value']))
 
 class Resolution:
-    def __init__(self, transport, clock):
+    def __init__(self, transport, clock, unlimited_research=False):
+        self.unlimited_research = unlimited_research
         self.transport, self.clock = transport, clock
         self.sessions = {}
 
     def fetch(self, url):
-        raw, _ = self.transport.get(url, MAX_SOURCE)
-        if len(raw) > MAX_SOURCE:
+        raw, _ = self.transport.get(url, None if self.unlimited_research else MAX_SOURCE)
+        if not self.unlimited_research and len(raw) > MAX_SOURCE:
             raise ProviderError('malformed_data', 'Source exceeds byte limit')
         return parse_json(raw), hashlib.sha256(raw).hexdigest(), self.clock()
 
@@ -171,7 +172,7 @@ class Resolution:
         key = lookup_params(params)
         url = f'https://data.sec.gov/submissions/CIK{key}.json'
         payload, checksum, stamp = self.fetch(url)
-        return decode_lookup(payload, key, url, checksum, stamp)
+        return decode_lookup(payload, key, url, checksum, stamp, unlimited_research=self.unlimited_research)
 
     def search(self, params):
         query, size, cursor = search_params(params)
@@ -195,7 +196,7 @@ class Resolution:
                     items = []
             else:
                 payload, checksum, stamp = self.fetch(DIRECTORY_URL)
-                items = match_candidates(decode_directory(payload, checksum, stamp), query)
+                items = match_candidates(decode_directory(payload, checksum, stamp, unlimited_research=self.unlimited_research), query)
                 coverage = DIRECTORY_COVERAGE
             offset = 0
         end, next_cursor = offset + size, None

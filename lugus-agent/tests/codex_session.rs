@@ -372,7 +372,9 @@ async fn cancellation_interrupts_an_active_turn_and_reaps_the_process() {
     let (cancel_tx, cancel) = watch::channel(false);
     let executor = RecallExecutor::default();
     let report = {
-        let run = runtime.run(request("run-cancel-active"), &executor, events, cancel);
+        let mut req = request("run-cancel-active");
+        req.limits.timeout = Duration::MAX;
+        let run = runtime.run(req, &executor, events, cancel);
         tokio::pin!(run);
 
         tokio::select! {
@@ -428,7 +430,9 @@ async fn cancellation_remains_responsive_while_a_tool_executor_is_pending() {
     let (events, mut received) = mpsc::channel(4);
     let (cancel_tx, cancel) = watch::channel(false);
     let report = {
-        let run = runtime.run(request("run-cancel-tool"), &PendingExecutor, events, cancel);
+        let mut req = request("run-cancel-tool");
+        req.limits.timeout = Duration::MAX;
+        let run = runtime.run(req, &PendingExecutor, events, cancel);
         tokio::pin!(run);
 
         tokio::select! {
@@ -679,5 +683,45 @@ async fn stored_evidence_run_disables_native_web_search() {
     let executor = RecallExecutor::default();
     let result = run(&mut runtime, input, &executor).await;
     assert_eq!(result.0.unwrap().outcome, RunOutcome::Completed);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn supports_codex_01540_session_and_tool_protocol() {
+    let executable = FakeExecutable::for_scenario("version_01540");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let executor = RecallExecutor::default();
+    let (report, _) = run(&mut runtime, request("run-01540"), &executor).await;
+    assert_eq!(report.unwrap().outcome, RunOutcome::Completed);
+    assert!(!executor.calls.lock().unwrap().is_empty());
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unlimited_research_handles_large_frames_and_slow_event_consumers() {
+    let executable = FakeExecutable::for_scenario("unlimited_large");
+    let mut runtime = CodexRuntime::connect(executable.config(None, None))
+        .await
+        .unwrap();
+    let mut req = request("unlimited");
+    req.limits.timeout = Duration::MAX;
+    req.prompt = "x".repeat(9 * 1024 * 1024);
+    let (tx, mut rx) = mpsc::channel(1);
+    let (_cancel, cancel) = watch::channel(false);
+    let drain = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        while rx.recv().await.is_some() {}
+    });
+    let report = timeout(
+        Duration::from_secs(20),
+        runtime.run(req, &RecallExecutor::default(), tx, cancel),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(report.final_text.len(), 9 * 1024 * 1024);
+    drain.await.unwrap();
     runtime.close().await.unwrap();
 }

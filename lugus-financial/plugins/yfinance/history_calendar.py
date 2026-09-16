@@ -38,10 +38,10 @@ def previous_session(name, start):
         raise ProviderError('not_found', 'No preceding calendar session')
     return days[-1].date().isoformat()
 
-def session_days(name, start, anchor, retrieved_at):
+def session_days(name, start, anchor, retrieved_at, unlimited_research=False):
     first = date.fromisoformat(previous_session(name, start))
     end = date.fromisoformat(anchor)
-    if (end-first).days >= 100_000:
+    if not unlimited_research and (end-first).days >= 100_000:
         raise ProviderError('invalid_request', 'Historical calendar exceeds row limit')
     schedule = get_calendar(name).schedule(start_date=first, end_date=end)
     sessions = {stamp.date().isoformat(): row['market_close'].isoformat().replace('+00:00','Z')

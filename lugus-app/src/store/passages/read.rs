@@ -70,9 +70,17 @@ pub(super) fn header(
     repo: &str,
     id: &str,
     max: usize,
+    unlimited: bool,
 ) -> Result<TextRepresentation> {
-    let h: TextRepresentation = record(db, scope, repo, id, "text", max.min(HEADER_MAX))?;
-    let cap = TextLimits::default();
+    let h: TextRepresentation = record(
+        db,
+        scope,
+        repo,
+        id,
+        "text",
+        if unlimited { max } else { max.min(HEADER_MAX) },
+    )?;
+    let cap = TextLimits::for_research_mode(unlimited);
     if h.id != id
         || h.workspace_id != scope.workspace_id
         || h.repository_id != repo
@@ -109,7 +117,7 @@ pub(super) fn chunks(
             |r| r.get(0),
         )
         .map_err(storage)?;
-    if bounded(stored_end, TextLimits::default().max_source_bytes)? != total {
+    if bounded(stored_end, total)? != total {
         return Err(corrupt());
     }
     if length == 0 && start == total {
@@ -162,7 +170,7 @@ pub(super) fn mappings(
     let expected = h.mapping_count as i64;
     let inventory: (i64, i64, i64) = db.query_row(
         "SELECT count(*),coalesce(min(ordinal),0),coalesce(max(ordinal),-1) FROM (SELECT ordinal FROM text_mappings WHERE representation=?1 ORDER BY ordinal LIMIT ?2)",
-        params![h.id, expected + 1],
+        params![h.id, expected.saturating_add(1)],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     ).map_err(storage)?;
     if inventory != (expected, 0, expected - 1) {
@@ -227,16 +235,17 @@ pub(super) fn passage(
     repo: &str,
     id: &str,
     max: usize,
+    unlimited: bool,
 ) -> Result<Passage> {
     let p: Passage = record(db, scope, repo, id, "passage", max)?;
     if p.id != id
         || p.scope.workspace_id != scope.workspace_id
-        || p.quote.len() > TextLimits::default().max_passage_bytes
+        || p.quote.len() > TextLimits::for_research_mode(unlimited).max_passage_bytes
         || p.quote_checksum != text_checksum(&p.quote)
     {
         return Err(corrupt());
     }
-    let h = header(db, scope, repo, &p.representation.id, HEADER_MAX)?;
+    let h = header(db, scope, repo, &p.representation.id, max, unlimited)?;
     if serde_json::to_value(&h).map_err(storage)?
         != serde_json::to_value(&p.representation).map_err(storage)?
     {
@@ -249,7 +258,7 @@ pub(super) fn passage(
         p.start,
         p.end,
         h.text_bytes,
-        TextLimits::default().max_passage_bytes,
+        TextLimits::for_research_mode(unlimited).max_passage_bytes,
     )?;
     let current_mappings = mappings(db, &h, p.start, p.end, max).map_err(|e| {
         if e.kind == ErrorKind::InvalidInput {
@@ -264,7 +273,12 @@ pub(super) fn passage(
     check_envelope(&p, max)?;
     Ok(p)
 }
-pub(super) fn sources(db: &Connection, p: &Passage, max: usize) -> Result<Vec<SourceExcerpt>> {
+pub(super) fn sources(
+    db: &Connection,
+    p: &Passage,
+    max: usize,
+    unlimited: bool,
+) -> Result<Vec<SourceExcerpt>> {
     let mut result = Vec::new();
     let mut used = 2;
     if used > max {
@@ -273,8 +287,18 @@ pub(super) fn sources(db: &Connection, p: &Passage, max: usize) -> Result<Vec<So
     for mapping in &p.mappings {
         if let Some(source) = &mapping.source {
             let (size,path_size,sum_size):(i64,i64,i64)=db.query_row("SELECT bytes,length(CAST(path AS BLOB)),length(CAST(checksum AS BLOB)) FROM text_nodes WHERE representation=?1 AND node=?2",params![p.representation.id,i64::from(source.node_id)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(storage)?;
-            let total = bounded(size, TextLimits::default().max_source_bytes)?;
-            bounded(path_size, HEADER_MAX.min(max.saturating_sub(used)))?;
+            let total = bounded(
+                size,
+                TextLimits::for_research_mode(unlimited).max_source_bytes,
+            )?;
+            bounded(
+                path_size,
+                if unlimited {
+                    max.saturating_sub(used)
+                } else {
+                    HEADER_MAX.min(max.saturating_sub(used))
+                },
+            )?;
             if sum_size != 64 {
                 return Err(corrupt());
             }
@@ -289,7 +313,7 @@ pub(super) fn sources(db: &Connection, p: &Passage, max: usize) -> Result<Vec<So
                 return Err(corrupt());
             }
             let path: Vec<u32> = serde_json::from_str(&path).map_err(storage)?;
-            if path.is_empty() || path.len() > TextLimits::default().max_depth {
+            if path.is_empty() || path.len() > TextLimits::for_research_mode(unlimited).max_depth {
                 return Err(corrupt());
             }
             let text = chunks(

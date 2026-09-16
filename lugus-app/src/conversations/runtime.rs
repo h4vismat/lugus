@@ -16,6 +16,12 @@ pub trait RuntimeFactory: Send + Sync {
         None
     }
 
+    /// Optional search preference frozen with the runtime selection for this message.
+    /// None preserves the host's ConversationOptions policy.
+    fn web_search(&self) -> Option<bool> {
+        None
+    }
+
     /// Optional deadline for a selected profile, applied to the whole message.
     fn run_timeout(&self) -> Option<std::time::Duration> {
         None

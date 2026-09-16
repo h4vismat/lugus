@@ -29,6 +29,8 @@ tauri = { version = "2", optional = true , features = [] }
 lugus-agent = { path = "../../lugus-agent" }
 async-trait = "0.1"
 tempfile = "3"
+rusqlite = { version = "0.39", features = ["bundled"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }

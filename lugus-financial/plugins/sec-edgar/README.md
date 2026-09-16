@@ -97,3 +97,9 @@ are returned immediately and remain enforced on later requests. HTTP 401/403
 requires checking source access and identifying User-Agent configuration; repeated
 unchanged requests are not an automatic recovery. Hard host deadlines still close
 the process. See the [recovery report](../../../docs/data-fetch-recovery.md).
+
+Research applications can initialize with `config.unlimited_research: true` to
+disable provider source, document, snapshot, response and row caps and execution
+deadlines. The default remains bounded. Unlimited operations can consume all
+available memory and run until the host cancels the plugin process. Pagination,
+protocol validation, source rate limits and retry/cooldown etiquette still apply.

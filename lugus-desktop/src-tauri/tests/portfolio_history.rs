@@ -50,7 +50,8 @@ async fn native_history_is_scoped_paged_and_usable_offline() {
     let mut dates = std::collections::BTreeSet::new();
     loop {
         let page=call(&b,json!({"kind":"history_read","portfolio_id":p["portfolio_id"],"id":r["id"],"offset":offset})).await;
-        assert!(serde_json::to_vec(&page).unwrap().len() <= 32768);
+        assert!(page["items"].as_array().unwrap().len() <= 200);
+        if offset == 0 { assert!(serde_json::to_vec(&page).unwrap().len() > 32768); }
         assert_eq!(page["key"]["revision"], "2");
         for row in page["items"].as_array().unwrap() {
             assert!(dates.insert(row["date"].as_str().unwrap().to_owned()));

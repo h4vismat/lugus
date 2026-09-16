@@ -60,6 +60,7 @@ impl AgentRuntime for Runtime {
 }
 fn send(c: &Conversation, id: &str) -> SendMessageRequest {
     SendMessageRequest {
+        research_brief: None,
         company_hint: None,
         conversation_id: c.id.clone(),
         request_id: id.into(),
@@ -392,7 +393,6 @@ async fn runtime_failures_are_terminal_and_cleanup_is_finite() {
         "wrong_id",
         "oversized",
         "empty",
-        "flood",
         "large_event",
         "close_error",
     ] {
@@ -1324,4 +1324,77 @@ async fn actionable_runtime_failure_category(mode: &'static str, expected_kind: 
         .unwrap();
     assert!(!payload.contains("private diagnostic"));
     assert!(!completion.contains("private diagnostic"));
+}
+
+#[tokio::test]
+async fn fragmented_answer_stream_is_persisted_without_exhausting_activity_events() {
+    let h = support::Harness::new(&[], HostBounds::default(), Limits::default()).await;
+    let (behavior, _, _) = Behavior::new("flood");
+    let host = ConversationHost::start_with_tools(
+        h.app.clone(),
+        Arc::new(behavior),
+        ConversationOptions::default(),
+    )
+    .await
+    .unwrap();
+    let c = host
+        .create("fragmented", "Fragmented stream")
+        .await
+        .unwrap();
+    let run = host.send(send(&c, "fragmented-run")).await.unwrap();
+    assert_eq!(terminal(&host, &c, &run).await.status, RunStatus::Completed);
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let page = host
+            .activity(&c.id, &run.id, PageRequest { offset, limit: 100 })
+            .await
+            .unwrap();
+        for record in &page.items {
+            if record.kind == "runtime" {
+                if let RuntimeEvent::TextDelta { text: delta } =
+                    serde_json::from_str(&record.data).unwrap()
+                {
+                    text.push_str(&delta);
+                }
+            }
+        }
+        if page.items.len() < 100 {
+            break;
+        }
+        offset += page.items.len();
+    }
+    assert_eq!(text, "partial".repeat(2000));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn buffered_text_flushes_while_runtime_is_still_running() {
+    let (_h, host, _) = host(true).await;
+    let c = host.create("live-batch", "Live batching").await.unwrap();
+    let run = host.send(send(&c, "live-batch-run")).await.unwrap();
+    let text = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let activity = host.activity(&c.id, &run.id, page()).await.unwrap();
+            for record in activity.items {
+                if record.kind == "runtime" {
+                    if let RuntimeEvent::TextDelta { text } =
+                        serde_json::from_str(&record.data).unwrap()
+                    {
+                        return text;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(text, "partial");
+    host.cancel(&c.id, &run.id).await.unwrap();
+    assert_eq!(
+        terminal(&host, &c, &run).await.status,
+        RunStatus::Interrupted
+    );
+    host.shutdown().await.unwrap();
 }

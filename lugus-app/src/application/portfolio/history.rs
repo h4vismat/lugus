@@ -9,7 +9,6 @@ use lugus_portfolio::{
     calculate_performance_cancellable, historical_values_cancellable,
 };
 use std::collections::BTreeSet;
-use tokio::time::Instant;
 struct ChildFetch {
     app: Application,
     scope: Scope,
@@ -23,16 +22,16 @@ impl Drop for ChildFetch {
 #[derive(Clone)]
 struct Stop {
     cancel: watch::Receiver<bool>,
-    deadline: Instant,
+    deadline: lugus_agent::deadline::Deadline,
 }
 impl Stop {
     fn stopped(&self) -> bool {
-        *self.cancel.borrow() || Instant::now() >= self.deadline
+        *self.cancel.borrow() || self.deadline.expired()
     }
     fn check(&self) -> Result<()> {
         if *self.cancel.borrow() {
             Err(error(ErrorKind::Cancelled, "portfolio history cancelled"))
-        } else if Instant::now() >= self.deadline {
+        } else if self.deadline.expired() {
             Err(error(
                 ErrorKind::Timeout,
                 "portfolio history deadline exceeded",
@@ -46,7 +45,7 @@ impl Stop {
         let mut cancel = self.cancel.clone();
         tokio::select! {biased;
             _=async{while !*cancel.borrow_and_update(){if cancel.changed().await.is_err(){break;}}}=>Err(error(ErrorKind::Cancelled,"portfolio history cancelled")),
-            _=tokio::time::sleep_until(self.deadline)=>Err(error(ErrorKind::Timeout,"portfolio history deadline exceeded")),
+            _=self.deadline.wait()=>Err(error(ErrorKind::Timeout,"portfolio history deadline exceeded")),
             result=future=>result,
         }
     }
@@ -151,7 +150,13 @@ impl Application {
             let _lease = lease;
             let stop = Stop {
                 cancel: cancelled,
-                deadline: Instant::now() + std::time::Duration::from_secs(300),
+                deadline: lugus_agent::deadline::Deadline::after(
+                    if app.limits().operation_timeout == std::time::Duration::MAX {
+                        std::time::Duration::MAX
+                    } else {
+                        std::time::Duration::from_secs(300)
+                    },
+                ),
             };
             if let Err(e) = app
                 .collect_history(&doc, &request, &mut result, anchor, &stop)
@@ -232,7 +237,9 @@ impl Application {
             .min()
             .unwrap_or(start)
             .min(baseline);
-        if (anchor - query_start).num_days() >= 100_000 {
+        if self.limits().operation_timeout != std::time::Duration::MAX
+            && (anchor - query_start).num_days() >= 100_000
+        {
             return Err(error(
                 ErrorKind::ResourceLimit,
                 "historical range exceeds limit",
@@ -256,7 +263,7 @@ impl Application {
                 }
             }
         }
-        if ids.len() > 100 {
+        if self.limits().operation_timeout != std::time::Duration::MAX && ids.len() > 100 {
             return Err(error(
                 ErrorKind::ResourceLimit,
                 "historical instrument limit exceeded",
@@ -342,7 +349,9 @@ impl Application {
                 pending.push(task);
             }
         }
-        if rows > 100_000 || bytes > 128 * 1024 * 1024 {
+        if self.limits().operation_timeout != std::time::Duration::MAX
+            && (rows > 100_000 || bytes > 128 * 1024 * 1024)
+        {
             return Err(error(
                 ErrorKind::ResourceLimit,
                 "cached history exceeds budget",
@@ -382,7 +391,9 @@ impl Application {
                         bytes += serde_json::to_vec(&bundle.1)
                             .map_err(|_| crate::portfolio::invalid("history serialization failed"))?
                             .len();
-                        if rows > 100_000 || bytes > 128 * 1024 * 1024 {
+                        if self.limits().operation_timeout != std::time::Duration::MAX
+                            && (rows > 100_000 || bytes > 128 * 1024 * 1024)
+                        {
                             return Err(error(
                                 ErrorKind::ResourceLimit,
                                 "portfolio history evidence exceeds budget",
@@ -588,7 +599,10 @@ impl Application {
             let next = self
                 .history_evidence_page(&scope, &id, PageRequest { offset, limit: 200 })
                 .await?;
-            if page.items.len() != offset || page.items.len() + next.items.len() > 100_000 {
+            if page.items.len() != offset
+                || (self.limits().operation_timeout != std::time::Duration::MAX
+                    && page.items.len() + next.items.len() > 100_000)
+            {
                 return Err(error(
                     ErrorKind::ResourceLimit,
                     "historical evidence pagination exceeds limit",

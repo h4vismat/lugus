@@ -99,7 +99,7 @@ class EdgarOpener:
         except ImportError as exc:
             raise ProviderError('configuration', 'Install the SEC plugin requirements') from exc
         url = request.full_url
-        deadline = self.monotonic() + timeout
+        deadline = None if timeout is None else self.monotonic() + timeout
         try:
             with self.client_factory(request.get_header('User-agent')) as client:
                 if not isinstance(client, httpx.Client):
@@ -109,8 +109,8 @@ class EdgarOpener:
                     validate_url(url, self.archive)
                     if hop:
                         self.before_request()
-                    remaining = deadline - self.monotonic()
-                    if remaining <= 0:
+                    remaining = None if deadline is None else deadline - self.monotonic()
+                    if remaining is not None and remaining <= 0:
                         raise TimeoutError('SEC request deadline exceeded')
                     with client.stream('GET', url, headers=dict(request.header_items()),
                                        timeout=remaining, follow_redirects=False) as response:

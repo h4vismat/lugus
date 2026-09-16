@@ -20,7 +20,15 @@ fn status_name(status: RunStatus) -> &'static str {
 pub(super) fn safe_failure(e: &AppError) -> AppError {
     AppError {
         kind: e.kind,
-        message: "conversation operation did not complete successfully".into(),
+        message: match e.kind {
+            ErrorKind::Unsupported => "The configured agent or data provider does not support this operation. Check the supported CLI version and configuration.",
+            ErrorKind::AuthenticationRequired => "The selected agent requires authentication. Sign in using its CLI, then try again.",
+            ErrorKind::NeedsAttention => "The selected agent needs attention. Check its CLI configuration and sign-in, then try again.",
+            ErrorKind::Unavailable => "The agent or data provider is unavailable. Check its installation, supported CLI version, and connection, then try again.",
+            ErrorKind::Timeout => "Research timed out. Try a narrower question or increase the configured timeout.",
+            ErrorKind::ResourceLimit => "A research component reported a resource limit.",
+            _ => "Conversation operation did not complete successfully. Check the request and configured data sources.",
+        }.into(),
         retryable: e.retryable,
         retry_after_seconds: e.retry_after_seconds,
     }
@@ -109,7 +117,7 @@ impl SqliteApplicationStore {
         request: &SendMessageRequest,
     ) -> Result<Option<RunRecord>> {
         request.validate(&self.conversation_limits)?;
-        let input = json(request, self.conversation_limits.message_bytes)?;
+        let input = json(request, request.encoded_limit(&self.conversation_limits))?;
         let tx = self.connection.unchecked_transaction().map_err(storage)?;
         authorize(
             &tx,
@@ -207,7 +215,7 @@ impl SqliteApplicationStore {
         request: &SendMessageRequest,
     ) -> Result<RunRecord> {
         request.validate(&self.conversation_limits)?;
-        let encoded = json(request, self.conversation_limits.message_bytes)?;
+        let encoded = json(request, request.encoded_limit(&self.conversation_limits))?;
         let max = record_cap(self);
         let repository = self.evidence.repository_identity()?;
         let version: i64 = self
@@ -272,13 +280,31 @@ impl SqliteApplicationStore {
         context_limits.context_bytes -= context_limits
             .selected_bytes
             .min(context_limits.context_bytes / 3);
-        let input = build_context_with_omitted(
+        let brief_budget = request
+            .research_brief
+            .as_ref()
+            .map(|brief| serde_json::to_string(brief).map(|s| s.len() + 32))
+            .transpose()
+            .map_err(storage)?
+            .unwrap_or(0);
+        let envelope_budget = context_limits.context_bytes;
+        context_limits.context_bytes = context_limits
+            .context_bytes
+            .checked_sub(brief_budget)
+            .ok_or_else(limit)?;
+        let mut input = build_context_with_omitted(
             &message,
             &exchanges,
             &references,
             omitted,
             &context_limits,
         )?;
+        if let Some(brief) = &request.research_brief {
+            let mut envelope: serde_json::Value =
+                serde_json::from_str(&input.serialized).map_err(storage)?;
+            envelope["research_brief"] = serde_json::Value::String(brief.clone());
+            input.serialized = json(&envelope, envelope_budget)?;
+        }
         let run = RunRecord {
             company_hint: request.company_hint.clone(),
             id: run_id,
@@ -517,5 +543,22 @@ impl SqliteApplicationStore {
         .map_err(storage)?;
         tx.commit().map_err(storage)?;
         Ok(run)
+    }
+}
+
+#[cfg(test)]
+mod failure_message_tests {
+    use super::*;
+    #[test]
+    fn safe_failure_explains_compatibility_without_exposing_runtime_content() {
+        let error = AppError::new(
+            ErrorKind::Unsupported,
+            "private runtime output or token",
+            false,
+        );
+        let safe = safe_failure(&error);
+        assert!(safe.message.contains("version"));
+        assert!(!safe.message.contains("private"));
+        assert_eq!(safe.kind, ErrorKind::Unsupported);
     }
 }

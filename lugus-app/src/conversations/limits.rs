@@ -59,6 +59,26 @@ pub fn default_conversation_run_limits() -> RunLimits {
 }
 
 impl ConversationLimits {
+    /// No research quotas beyond representable allocation/storage sizes.
+    /// Pagination, concurrency, backpressure and shutdown grace remain finite.
+    pub fn unlimited_research() -> Self {
+        let mut limits = Self::default();
+        limits.message_bytes = isize::MAX as usize;
+        limits.assistant_bytes = isize::MAX as usize;
+        limits.context_bytes = isize::MAX as usize;
+        limits.context_messages = isize::MAX as usize;
+        limits.selected_refs = isize::MAX as usize;
+        limits.selected_bytes = isize::MAX as usize;
+        limits.activity_events = isize::MAX as usize;
+        limits.activity_bytes = isize::MAX as usize;
+        limits.tool_calls = isize::MAX as usize;
+        limits.tool_record_bytes = isize::MAX as usize;
+        limits.tool_total_bytes = isize::MAX as usize;
+        limits.open_views = isize::MAX as usize;
+        limits.page_bytes = isize::MAX as usize;
+        limits
+    }
+
     /// Terminal metadata is charged separately from activity so an exhausted activity budget
     /// cannot prevent recording a stable error/status. Assistant output has its own limit.
     pub const TERMINAL_METADATA_BYTES: usize = 16_384;
@@ -87,10 +107,12 @@ impl ConversationLimits {
         ];
         if bytes
             .into_iter()
-            .all(|n| (1..=Self::MAX_BYTES).contains(&n))
+            .all(|n| (1..=isize::MAX as usize).contains(&n))
             && items
                 .into_iter()
-                .all(|n| (1..=Self::MAX_ITEMS).contains(&n))
+                .all(|n| (1..=isize::MAX as usize).contains(&n))
+            && (1..=Self::MAX_ITEMS).contains(&self.event_capacity)
+            && (1..=Self::MAX_ITEMS).contains(&self.page_items)
             && (1..=1024).contains(&self.active_runs)
             && (1..=60_000).contains(&self.runtime_close_timeout_ms)
         {
@@ -104,11 +126,14 @@ impl ConversationLimits {
         self.validate()?;
         app.validate()?;
         if requested.timeout.is_zero()
-            || requested.timeout > Duration::from_secs(86_400)
+            || (requested.timeout > Duration::from_secs(86_400)
+                && requested.timeout != Duration::MAX)
             || requested.max_tool_calls == 0
-            || requested.max_tool_calls > Self::MAX_ITEMS
+            || (requested.max_tool_calls > Self::MAX_ITEMS
+                && requested.max_tool_calls != isize::MAX as usize)
             || requested.max_tool_result_bytes == 0
-            || requested.max_tool_result_bytes > Self::MAX_BYTES
+            || (requested.max_tool_result_bytes > Self::MAX_BYTES
+                && requested.max_tool_result_bytes != isize::MAX as usize)
         {
             return Err(invalid("conversation run limits are outside safe bounds"));
         }

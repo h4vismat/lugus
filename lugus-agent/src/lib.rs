@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod deadline;
 pub mod error;
 pub mod runtime;
 pub mod tools;

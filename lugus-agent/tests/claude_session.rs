@@ -277,7 +277,11 @@ async fn cancellation_and_timeout_interrupt_the_cli_and_tool_executor() {
             let (tx, _rx) = mpsc::channel(32);
             let (cancel_tx, cancel_rx) = watch::channel(false);
             let mut req = request(scenario);
-            req.limits.timeout = Duration::from_millis(300);
+            req.limits.timeout = if cancelled {
+                Duration::MAX
+            } else {
+                Duration::from_millis(300)
+            };
             let trigger = tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 if cancelled {
@@ -392,4 +396,29 @@ async fn validates_configuration_and_rejects_unsupported_cli() {
 async fn informational_tool_progress_does_not_terminate_a_valid_run() {
     let (report, _) = invoke("progress", &executor()).await;
     assert_eq!(report.unwrap().outcome, RunOutcome::Completed);
+}
+
+#[tokio::test]
+async fn unlimited_research_handles_large_frames_and_slow_event_consumers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut runtime = ClaudeRuntime::connect(config(&dir)).await.unwrap();
+    let mut req = request("unlimited_large");
+    req.limits.timeout = Duration::MAX;
+    let (tx, mut rx) = mpsc::channel(1);
+    let (_cancel, cancel) = watch::channel(false);
+    let drain = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        while rx.recv().await.is_some() {}
+    });
+    let report = tokio::time::timeout(
+        Duration::from_secs(20),
+        runtime.run(req, &executor(), tx, cancel),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(report.final_text.len(), 9 * 1024 * 1024);
+    drain.await.unwrap();
+    runtime.close().await.unwrap();
+    assert_cleaned(&dir).await;
 }

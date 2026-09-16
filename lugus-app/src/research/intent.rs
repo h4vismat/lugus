@@ -10,6 +10,7 @@ pub const MAX_INTENT_BYTES: usize = 8 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum Workflow {
     Conversation,
+    WebSearch,
     Research,
     Prices,
     Compare,
@@ -44,7 +45,7 @@ fn bounded_text(text: &str, max: usize) -> bool {
 impl ResearchIntent {
     pub fn validate(&self, today: NaiveDate) -> Result<()> {
         let expected = match self.workflow {
-            Workflow::Conversation | Workflow::Clarify => 0,
+            Workflow::Conversation | Workflow::WebSearch | Workflow::Clarify => 0,
             Workflow::Research | Workflow::Prices => 1,
             Workflow::Compare => 2,
         };

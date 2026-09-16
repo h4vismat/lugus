@@ -67,7 +67,7 @@ fn configuration(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>
                 std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/bin/codex"))
             })
             .filter(|p| p.is_file());
-        let runtime=executable.map(|p|serde_json::json!({"executable":p,"workspace":"runtime","model":null,"model_provider":null,"timeout_secs":180}));
+        let runtime=executable.map(|p|serde_json::json!({"executable":p,"workspace":"runtime","model":null,"model_provider":null}));
         std::fs::write(
             &path,
             serde_json::to_vec_pretty(

@@ -1,6 +1,6 @@
 # lugus-agent
 
-`lugus-agent` provides disposable agent turns and durable, explicitly requested investment reviews. Its public `AgentRuntime` and `ToolExecutor` boundaries are provider-neutral. The adapters support `codex-cli 0.153.4` and Claude Code `2.1.268` exactly.
+`lugus-agent` provides disposable agent turns and durable, explicitly requested investment reviews. Its public `AgentRuntime` and `ToolExecutor` boundaries are provider-neutral. The adapters support `codex-cli 0.153.4` or `0.154.0`, and Claude Code `2.1.268`. Other CLI versions are rejected until their protocol compatibility is verified.
 
 ## Run the Claude Code example
 

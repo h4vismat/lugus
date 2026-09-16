@@ -83,7 +83,10 @@ pub async fn prepare_research(
             issues: vec![],
         },
     };
-    if matches!(intent.workflow, Workflow::Conversation | Workflow::Clarify) {
+    if matches!(
+        intent.workflow,
+        Workflow::Conversation | Workflow::WebSearch | Workflow::Clarify
+    ) {
         if let Some(previous) = previous {
             // Conversational interludes must not erase verified company context.
             work.output.subjects = previous.subjects.clone();

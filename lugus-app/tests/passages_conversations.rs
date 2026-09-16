@@ -93,6 +93,7 @@ async fn passage_is_frozen_as_untrusted_runtime_data_and_duplicate_turn_retains_
     .await
     .unwrap();
     let send = SendMessageRequest {
+        research_brief: None,
         company_hint: None,
         conversation_id: c.id.clone(),
         request_id: "send".into(),
@@ -282,6 +283,7 @@ async fn oversized_required_passage_rejects_before_runtime_or_turn_admission() {
     .unwrap();
     assert_eq!(
         host.send(SendMessageRequest {
+            research_brief: None,
             company_hint: None,
             conversation_id: c.id.clone(),
             request_id: "turn".into(),
@@ -399,6 +401,7 @@ async fn injected_sparse_node_ids_survive_preparation_and_frozen_runtime_admissi
         .unwrap();
         let run = host
             .send(SendMessageRequest {
+                research_brief: None,
                 company_hint: None,
                 conversation_id: conversation.id.clone(),
                 request_id: "select-sparse-node".into(),

@@ -9,7 +9,7 @@ use lugus_financial::{
     resolution::{Candidate, LookupRequest, ResolutionPage, SearchRequest},
 };
 use std::{future::Future, io::Write};
-use tokio::{sync::watch, time::Instant};
+use tokio::sync::watch;
 
 pub(super) async fn cancelled(rx: &mut watch::Receiver<bool>) {
     loop {
@@ -23,7 +23,7 @@ pub(super) async fn cancelled(rx: &mut watch::Receiver<bool>) {
 }
 pub(super) struct Budget {
     pub limits: Limits,
-    pub deadline: Instant,
+    pub deadline: lugus_agent::deadline::Deadline,
     pub cancel: watch::Receiver<bool>,
     pub shutdown: watch::Receiver<bool>,
     pub cause: Option<AppError>,
@@ -34,13 +34,13 @@ pub(super) struct Budget {
 impl Budget {
     pub fn new(
         limits: Limits,
-        deadline: Instant,
+        deadline: impl Into<lugus_agent::deadline::Deadline>,
         cancel: watch::Receiver<bool>,
         shutdown: watch::Receiver<bool>,
     ) -> Self {
         Self {
             limits,
-            deadline,
+            deadline: deadline.into(),
             cancel,
             shutdown,
             cause: None,
@@ -73,7 +73,7 @@ impl Budget {
             biased;
             _ = cancelled(&mut self.shutdown) => Err(self.fail(ErrorKind::Cancelled)),
             _ = cancelled(&mut self.cancel) => Err(self.fail(ErrorKind::Cancelled)),
-            _ = tokio::time::sleep_until(self.deadline) => Err(self.fail(ErrorKind::Timeout)),
+            _ = self.deadline.wait() => Err(self.fail(ErrorKind::Timeout)),
             result = future => {
                 if result.as_ref().is_err_and(|e| e.kind == FinancialKind::Protocol && matches!(e.message.as_str(), "response exceeds size limit" | "document exceeds size limit")) {
                     self.cause = Some(AppError::new(ErrorKind::ResourceLimit, "provider response exceeds byte budget", false));

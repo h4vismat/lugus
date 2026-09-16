@@ -6,13 +6,23 @@ fn cached(
     dataset: &str,
     extractor: &str,
     max: usize,
+    unlimited: bool,
 ) -> Result<Option<TextRepresentation>> {
     let size:Option<i64>=db.query_row("SELECT length(CAST(id AS BLOB)) FROM text_representations WHERE workspace=?1 AND repository=?2 AND dataset=?3 AND extractor=?4",params![scope.workspace_id,repo,dataset,extractor],|r|r.get(0)).optional().map_err(storage)?;
     let Some(size) = size else { return Ok(None) };
     bounded(size, Scope::MAX_ID_BYTES)?;
     let id:String=db.query_row("SELECT id FROM text_representations WHERE workspace=?1 AND repository=?2 AND dataset=?3 AND extractor=?4",params![scope.workspace_id,repo,dataset,extractor],|r|r.get(0)).map_err(storage)?;
-    let h = read::header(db, scope, repo, &id, max)?;
-    if h.dataset_id != dataset || json(&h.extractor, HEADER_MAX)? != extractor {
+    let h = read::header(db, scope, repo, &id, max, unlimited)?;
+    if h.dataset_id != dataset
+        || json(
+            &h.extractor,
+            if unlimited {
+                isize::MAX as usize
+            } else {
+                HEADER_MAX
+            },
+        )? != extractor
+    {
         return Err(corrupt());
     }
     Ok(Some(h))
@@ -23,6 +33,7 @@ fn duplicate_passage(
     repo: &str,
     input: &str,
     max: usize,
+    unlimited: bool,
 ) -> Result<Option<Passage>> {
     let existing: Option<(bool,i64)> = db.query_row("SELECT input=?3,length(CAST(passage AS BLOB)) FROM passage_requests WHERE workspace=?1 AND request=?2", params![scope.workspace_id,scope.request_id,input], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(storage)?;
     let Some((same, size)) = existing else {
@@ -42,7 +53,7 @@ fn duplicate_passage(
             |r| r.get(0),
         )
         .map_err(storage)?;
-    Ok(Some(read::passage(db, scope, repo, &id, max)?))
+    Ok(Some(read::passage(db, scope, repo, &id, max, unlimited)?))
 }
 impl PassageStore for SqliteApplicationStore {
     fn load_text_preparation(
@@ -54,7 +65,14 @@ impl PassageStore for SqliteApplicationStore {
         max_result_bytes: usize,
     ) -> Result<TextPreparation> {
         let limits = limits.effective(&self.limits)?;
-        let key = json(extractor, HEADER_MAX)?;
+        let key = json(
+            extractor,
+            if self.limits.max_document_bytes == isize::MAX as usize {
+                isize::MAX as usize
+            } else {
+                HEADER_MAX
+            },
+        )?;
         let repo = self.evidence.repository_identity()?;
         let tx = self.connection.unchecked_transaction().map_err(storage)?;
         let dataset = read::dataset(&tx, scope, &repo, dataset_id, self.limits.max_output_bytes)?;
@@ -65,6 +83,7 @@ impl PassageStore for SqliteApplicationStore {
             dataset_id,
             &key,
             max_result_bytes.min(self.limits.max_output_bytes),
+            self.limits.max_document_bytes == isize::MAX as usize,
         )? {
             tx.commit().map_err(storage)?;
             return Ok(TextPreparation::Cached(Box::new(h)));
@@ -112,7 +131,15 @@ impl PassageStore for SqliteApplicationStore {
                 "document dataset changed during preparation",
             ));
         }
-        if let Some(existing) = cached(&tx, scope, &repo, &dataset.id, &prepared.extractor, max)? {
+        if let Some(existing) = cached(
+            &tx,
+            scope,
+            &repo,
+            &dataset.id,
+            &prepared.extractor,
+            max,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )? {
             tx.commit().map_err(storage)?;
             return Ok(existing);
         }
@@ -120,7 +147,14 @@ impl PassageStore for SqliteApplicationStore {
         h.id = self.ids.next_id();
         super::super::sqlite::validate_id(&h.id)?;
         h.created_at = self.clock.now();
-        let payload = json(&h, max.min(HEADER_MAX))?;
+        let payload = json(
+            &h,
+            if self.limits.max_document_bytes == isize::MAX as usize {
+                max
+            } else {
+                max.min(HEADER_MAX)
+            },
+        )?;
         tx.execute("INSERT INTO app_records(id,workspace,repository,category,payload) VALUES(?1,?2,?3,'text',?4)",params![h.id,scope.workspace_id,repo,payload]).map_err(storage)?;
         tx.execute("INSERT INTO text_representations(id,workspace,repository,dataset,extractor,checksum) VALUES(?1,?2,?3,?4,?5,?6)",params![h.id,scope.workspace_id,repo,dataset.id,prepared.extractor,text_checksum(&payload)]).map_err(storage)?;
         {
@@ -181,6 +215,7 @@ impl PassageStore for SqliteApplicationStore {
             &repo,
             id,
             max_result_bytes.min(self.limits.max_output_bytes),
+            self.limits.max_document_bytes == isize::MAX as usize,
         )?;
         tx.commit().map_err(storage)?;
         Ok(h)
@@ -202,7 +237,8 @@ impl PassageStore for SqliteApplicationStore {
             scope,
             &repo,
             id,
-            HEADER_MAX.min(self.limits.max_output_bytes),
+            self.limits.max_output_bytes,
+            self.limits.max_document_bytes == isize::MAX as usize,
         )?;
         let text = read::chunks(&tx, id, -1, start, end, h.text_bytes, limits.max_page_bytes)?;
         let page = TextPage {
@@ -229,7 +265,14 @@ impl PassageStore for SqliteApplicationStore {
         let input = json(request, self.limits.max_input_bytes)?;
         let repo = self.evidence.repository_identity()?;
         let tx = self.connection.unchecked_transaction().map_err(storage)?;
-        if let Some(p) = duplicate_passage(&tx, scope, &repo, &input, max)? {
+        if let Some(p) = duplicate_passage(
+            &tx,
+            scope,
+            &repo,
+            &input,
+            max,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )? {
             tx.commit().map_err(storage)?;
             return Ok(p);
         }
@@ -243,7 +286,8 @@ impl PassageStore for SqliteApplicationStore {
             scope,
             &repo,
             &request.representation_id,
-            HEADER_MAX.min(self.limits.max_output_bytes),
+            self.limits.max_output_bytes,
+            self.limits.max_document_bytes == isize::MAX as usize,
         )?;
         let text = read::chunks(
             &tx,
@@ -268,20 +312,39 @@ impl PassageStore for SqliteApplicationStore {
             max,
         )?;
         // Validate accessed source content and full result in one read snapshot.
-        read::sources(&tx, &p, self.limits.max_output_bytes)?;
+        read::sources(
+            &tx,
+            &p,
+            self.limits.max_output_bytes,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )?;
         let payload = json(&p, max)?;
         tx.commit().map_err(storage)?;
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(storage)?;
-        if let Some(existing) = duplicate_passage(&tx, scope, &repo, &input, max)? {
+        if let Some(existing) = duplicate_passage(
+            &tx,
+            scope,
+            &repo,
+            &input,
+            max,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )? {
             tx.commit().map_err(storage)?;
             return Ok(existing);
         }
         // Published representations are immutable. Recheck their trusted identity
         // after moving from the read snapshot to the short insertion transaction.
-        let current = read::header(&tx, scope, &repo, &p.representation.id, HEADER_MAX)?;
+        let current = read::header(
+            &tx,
+            scope,
+            &repo,
+            &p.representation.id,
+            self.limits.max_output_bytes,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )?;
         if serde_json::to_value(&current).map_err(storage)?
             != serde_json::to_value(&p.representation).map_err(storage)?
         {
@@ -301,6 +364,7 @@ impl PassageStore for SqliteApplicationStore {
             &repo,
             id,
             max_result_bytes.min(self.limits.max_output_bytes),
+            self.limits.max_document_bytes == isize::MAX as usize,
         )?;
         tx.commit().map_err(storage)?;
         Ok(p)
@@ -314,12 +378,24 @@ impl PassageStore for SqliteApplicationStore {
         let max = max_result_bytes.min(self.limits.max_output_bytes);
         let repo = self.evidence.repository_identity()?;
         let tx = self.connection.unchecked_transaction().map_err(storage)?;
-        let passage = read::passage(&tx, scope, &repo, id, max)?;
+        let passage = read::passage(
+            &tx,
+            scope,
+            &repo,
+            id,
+            max,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )?;
         let remaining = max
             .checked_sub(check_envelope(&passage, max)?)
             .and_then(|n| n.checked_sub(23))
             .ok_or_else(limit)?;
-        let sources = read::sources(&tx, &passage, remaining)?;
+        let sources = read::sources(
+            &tx,
+            &passage,
+            remaining,
+            self.limits.max_document_bytes == isize::MAX as usize,
+        )?;
         let result = PassageSource { passage, sources };
         check_envelope(&result, max)?;
         tx.commit().map_err(storage)?;

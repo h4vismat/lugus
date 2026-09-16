@@ -796,3 +796,81 @@ fn passage_creation_preserves_mapping_checksum_and_sqlite_storage_errors() {
         0
     );
 }
+
+#[test]
+fn unlimited_research_passage_survives_readback_source_resolution_and_freezing() {
+    use lugus_app::conversations::{ConversationLimits, FrozenReference};
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("app");
+    let fin = dir.path().join("fin");
+    let mut store = SqliteApplicationStore::open(
+        &db,
+        Box::new(SqliteRepository::open(&fin).unwrap()),
+        Limits::unlimited_research(),
+        Box::new(SystemClock),
+        Box::new(Ids(AtomicU64::new(1))),
+    )
+    .unwrap();
+    let quote = "evidence".repeat(10_000);
+    let html = format!("{}{}{}", "<div>".repeat(300), quote, "</div>".repeat(300));
+    let d = dataset(&mut store, &fin, &html);
+    let limits = TextLimits::unlimited_research();
+    let max = isize::MAX as usize;
+    let TextPreparation::Input(input) = store
+        .load_text_preparation(&scope(), &d.id, &ExtractorIdentity::html_v1(), &limits, max)
+        .unwrap()
+    else {
+        panic!("fresh representation")
+    };
+    let extracted = extract_html(
+        &input.bytes,
+        input.media_type(),
+        &limits,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let prepared = PreparedText::new(*input, extracted, &limits, &AtomicBool::new(false)).unwrap();
+    let header = store
+        .save_text_representation(&scope(), &prepared, max)
+        .unwrap();
+    assert_eq!(
+        store
+            .read_text_page(&scope(), &header.id, 0, quote.len(), &limits, max)
+            .unwrap()
+            .text,
+        quote
+    );
+    let request = CreatePassageRequest {
+        representation_id: header.id,
+        start: 0,
+        end: quote.len(),
+        expected_text: quote.clone(),
+    };
+    let passage = store
+        .create_passage(&scope(), &request, &limits, max)
+        .unwrap();
+    drop(store);
+    let store = SqliteApplicationStore::open(
+        &db,
+        Box::new(SqliteRepository::open(&fin).unwrap()),
+        Limits::unlimited_research(),
+        Box::new(SystemClock),
+        Box::new(Ids(AtomicU64::new(100))),
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .read_passage(&scope(), &passage.id, max)
+            .unwrap()
+            .quote,
+        quote
+    );
+    let source = store
+        .resolve_passage_sources(&scope(), &passage.id, max)
+        .unwrap();
+    assert!(source.sources[0].path.len() > TextLimits::default().max_depth);
+    let conversation_limits = ConversationLimits::unlimited_research();
+    let frozen = FrozenReference::from_passage(&passage, &conversation_limits).unwrap();
+    frozen.validate(&conversation_limits).unwrap();
+    assert!(FrozenReference::from_passage(&passage, &ConversationLimits::default()).is_err());
+}

@@ -63,7 +63,7 @@ def project_metadata(source, query, retrieved_at):
         raise ProviderError('malformed_data', 'Invalid source instrument metadata or symbol mismatch') from exc
 
 
-def fetch_metadata(symbol):
+def fetch_metadata(symbol, unlimited_research=False):
     """Prime bounded daily history, then read actual chart.meta fields.
 
     yfinance 1.7.0 get_info overwrites symbol with the request; it cannot be
@@ -81,10 +81,11 @@ def fetch_metadata(symbol):
         cache.mkdir(exist_ok=True)
         yf.set_tz_cache_location(str(cache))
         yf.config.debug.hide_exceptions = False
-        ticker = yf.Ticker(symbol)
+        from transport import ticker_for_research
+        ticker = ticker_for_research(yf, symbol, unlimited_research)
         # Prime explicitly: get_history_metadata alone swallows initial errors.
         ticker.history(period='5d', interval='1d', auto_adjust=False,
-                       back_adjust=False, repair=False, actions=False, timeout=10)
+                       back_adjust=False, repair=False, actions=False, timeout=None if unlimited_research else 10)
         metadata = ticker.get_history_metadata()
         # Do not iterate its lazy mapping: tradingPeriods could trigger extra IO.
         return {key: metadata.get(key) for key in SOURCE_FIELDS}

@@ -74,7 +74,18 @@ impl ProviderFactory for ProcessProviderFactory {
                 self.manifest.clone(),
                 self.directory.clone(),
                 self.instance_id.clone(),
-                self.config.clone(),
+                {
+                    let mut config = self.config.clone();
+                    if limits.operation_timeout == std::time::Duration::MAX
+                        && matches!(self.manifest.id.as_str(), "sec-edgar" | "yfinance")
+                    {
+                        if !config.is_object() {
+                            config = serde_json::json!({});
+                        }
+                        config["unlimited_research"] = serde_json::json!(true);
+                    }
+                    config
+                },
                 lugus_financial::plugin::Limits {
                     timeout: limits.operation_timeout,
                     // Allow bounded envelope overhead; the per-job wrapper counts all decoded payloads.

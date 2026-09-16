@@ -204,7 +204,13 @@ async fn selected_claude_profile_runs_both_sessions_and_switching_back_uses_code
     let next = bridge.dispatch(&send("codex")).await.unwrap();
     let failed = wait_for_run(&bridge, &chat["id"], &next["id"]).await;
     assert_eq!(failed["status"], "failed");
-    assert_eq!(failed["error"]["kind"], "unavailable", "{failed}");
+    assert_eq!(failed["error"]["kind"], "unsupported", "{failed}");
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("CLI version")
+    );
     assert_eq!(
         std::fs::read_to_string(dir.path().join("runtime/sessions")).unwrap(),
         "interpretation\nanswer\n"

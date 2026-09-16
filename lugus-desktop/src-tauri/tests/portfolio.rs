@@ -6,7 +6,7 @@ async fn call(b: &Bridge, c: Value) -> Value {
         .unwrap()
 }
 #[tokio::test]
-async fn portfolio_pages_fit_small_response_budgets_without_skipping_items() {
+async fn desktop_ignores_legacy_response_budgets_without_skipping_items() {
     let dir = tempfile::tempdir().unwrap();
     let limits = lugus_app::Limits {
         max_output_bytes: 32768,
@@ -31,8 +31,10 @@ async fn portfolio_pages_fit_small_response_budgets_without_skipping_items() {
     let mut seen = std::collections::BTreeSet::new();
     loop {
         let page = call(&bridge, json!({"kind":"list","offset":offset})).await;
-        assert!(serde_json::to_vec(&page).unwrap().len() <= 32768);
-        assert!(page["items"].as_array().unwrap().len() < 100);
+        if offset == 0 {
+            assert!(serde_json::to_vec(&page).unwrap().len() > 32768);
+            assert_eq!(page["items"].as_array().unwrap().len(), 100);
+        }
         for item in page["items"].as_array().unwrap() {
             assert!(seen.insert(item["id"].as_str().unwrap().to_owned()));
         }

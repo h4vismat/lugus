@@ -123,6 +123,7 @@ async fn portfolio_chat_uses_only_selected_frozen_evidence_without_research() {
     .unwrap();
     let run = host
         .send(SendMessageRequest {
+            research_brief: None,
             company_hint: None,
             conversation_id: c.id.clone(),
             request_id: "question".into(),

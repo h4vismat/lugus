@@ -59,7 +59,7 @@ impl FrozenReference {
         limits: &ConversationLimits,
     ) -> Result<Self> {
         limits.validate()?;
-        validate_passage(passage)?;
+        validate_passage(passage, limits)?;
         Self::freeze(
             SelectedReference::Passage {
                 id: passage.id.clone(),
@@ -155,7 +155,7 @@ impl FrozenReference {
             SelectedReference::Passage { .. } => {
                 let payload: crate::passages::Passage =
                     decode_frozen(&self.serialized, limits.selected_bytes)?;
-                validate_passage(&payload)?;
+                validate_passage(&payload, limits)?;
                 payload.id
             }
             SelectedReference::Dataset { .. } => {
@@ -265,10 +265,10 @@ fn decode_frozen<T: DeserializeOwned + Serialize>(serialized: &str, max_bytes: u
 }
 
 // Restoration checks the self-contained immutable contract without looking up current evidence.
-fn validate_passage(p: &crate::passages::Passage) -> Result<()> {
+fn validate_passage(p: &crate::passages::Passage, limits: &ConversationLimits) -> Result<()> {
     use crate::passages::{MappingKind, TextLimits, text_checksum};
     let h = &p.representation;
-    let cap = TextLimits::default();
+    let cap = TextLimits::for_research_mode(limits.selected_bytes == isize::MAX as usize);
     p.scope.validate()?;
     for id in [
         &p.id,

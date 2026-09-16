@@ -53,3 +53,18 @@ test('partial failed fact snapshots remain visible with their error and exact ro
  const loaded=await readSavedFacts(first,async()=>{throw Error('unexpected');});
  assert.equal(loaded.header.error?.message,'Source timed out');assert.equal(loaded.rows.length,1);
 });
+
+
+test('default price and fact readers preserve all rows beyond former desktop caps',async()=>{
+ const count=100_001;
+ const largeHeader={...header,row_count:count};
+ const read=(offset:number):Dataset=>{
+  const end=Math.min(offset+200,count);
+  return {header:largeHeader,rows:Array.from({length:end-offset},()=>prices[0]),next_offset:end<count?end:null};
+ };
+ for(const loader of [readSavedWindow,readSavedFacts]){
+  const loaded=await loader(read(0),async offset=>read(offset));
+  assert.equal(loaded.rows.length,count);
+  assert.equal(loaded.next_offset,null);
+ }
+});

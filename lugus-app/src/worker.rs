@@ -15,10 +15,7 @@ use recording::Recording;
 pub use recording::{RunKind, RunReceipt};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use tokio::{
-    sync::{Semaphore, mpsc, oneshot, watch},
-    time::Instant,
-};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 /// Clone once per worker to share the host's bounded active-job capacity.
 #[derive(Clone)]
@@ -106,7 +103,7 @@ struct Job {
     offering: Offering,
     provenance: FetchProvenance,
     generation: u64,
-    deadline: Instant,
+    deadline: lugus_agent::deadline::Deadline,
     cancel: watch::Receiver<bool>,
     state: watch::Sender<JobState>,
     result: oneshot::Sender<FetchResult>,
@@ -347,7 +344,7 @@ impl WorkerHandle {
                 binding_id: None,
             },
             generation: self.generation,
-            deadline: Instant::now() + self.limits.operation_timeout,
+            deadline: lugus_agent::deadline::Deadline::after(self.limits.operation_timeout),
             cancel,
             state: state_tx,
             result: result_tx,
@@ -451,7 +448,7 @@ async fn execute_job(
         biased;
         _ = cancelled(&mut shutdown) => Err(cancelled_error()),
         _ = cancelled(&mut job.cancel) => Err(cancelled_error()),
-        _ = tokio::time::sleep_until(job.deadline) => Err(AppError::new(ErrorKind::Timeout, "queued job deadline exceeded", false)),
+        _ = job.deadline.wait() => Err(AppError::new(ErrorKind::Timeout, "queued job deadline exceeded", false)),
         permit = slots.clone().acquire_owned() => permit.map_err(|_| unavailable("job capacity is closed")),
     };
     let _permit = match permit {

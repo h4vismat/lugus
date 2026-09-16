@@ -113,3 +113,9 @@ See [historical prices v1](../../docs/protocol/historical-prices-v1.md).
 Run `python live_history_check.py --output /tmp/lugus-history-live.json` in the plugin
 virtual environment for a read-only source check of Apple's 2020 split and the
 S&P 500 total-return index. Source completeness remains explicitly unverified.
+
+Research applications can initialize with `config.unlimited_research: true` to
+disable provider source, document, snapshot, response and row caps and execution
+deadlines. The default remains bounded. Unlimited operations can consume all
+available memory and run until the host cancels the plugin process. Pagination,
+protocol validation, source rate limits and retry/cooldown etiquette still apply.

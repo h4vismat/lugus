@@ -366,6 +366,7 @@ mod tests {
         gates().lock().unwrap().insert(c.id.clone(), gate.clone());
         let run = host
             .send(SendMessageRequest {
+                research_brief: None,
                 company_hint: None,
                 conversation_id: c.id.clone(),
                 request_id: "one".into(),

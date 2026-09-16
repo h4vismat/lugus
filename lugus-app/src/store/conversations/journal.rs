@@ -123,11 +123,15 @@ impl SqliteApplicationStore {
         };
         let payload = json(&record, max)?;
         // Reserve the whole result envelope and terminal timestamp before dispatch. The capacity bounds ToolOutcome, not raw output text.
-        let reserved = payload
-            .len()
-            .checked_add(intent.result_capacity)
-            .and_then(|v| v.checked_add(64))
-            .ok_or_else(limit)?;
+        let reserved = if self.conversation_limits.tool_total_bytes == isize::MAX as usize {
+            payload.len()
+        } else {
+            payload
+                .len()
+                .checked_add(intent.result_capacity)
+                .and_then(|v| v.checked_add(64))
+                .ok_or_else(limit)?
+        };
         if reserved > max
             || reserved
                 > self
@@ -203,7 +207,14 @@ impl SqliteApplicationStore {
             )
             .map_err(storage)?;
         check_size(reserved, max)?;
-        let payload = json(&record, reserved as usize)?;
+        let payload = json(
+            &record,
+            if self.conversation_limits.tool_total_bytes == isize::MAX as usize {
+                max
+            } else {
+                reserved as usize
+            },
+        )?;
         tx.execute(
             "UPDATE conversation_tools SET payload=?3,finished=1 WHERE run_id=?1 AND call_id=?2",
             params![attempt.run_id, call, payload],

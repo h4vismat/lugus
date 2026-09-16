@@ -147,6 +147,9 @@ pub struct FrozenReference {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessageRequest {
+    /// Investor-authored context, frozen as untrusted prompt data separately from message text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_brief: Option<String>,
     /// Unverified user-supplied resolution hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub company_hint: Option<String>,
@@ -164,6 +167,11 @@ impl SendMessageRequest {
         if self.text.trim().is_empty() {
             return Err(invalid("message text must not be empty"));
         }
+        if self.research_brief.as_ref().is_some_and(|brief| {
+            limits.context_bytes != isize::MAX as usize && brief.len() > 24 * 1024
+        }) {
+            return Err(resource_limit());
+        }
         if self.company_hint.as_ref().is_some_and(|hint| {
             hint.trim().is_empty() || hint.len() > 256 || hint.chars().any(char::is_control)
         }) {
@@ -175,7 +183,21 @@ impl SendMessageRequest {
         for reference in &self.selected {
             reference.validate()?;
         }
-        crate::agent_contract::check_serialized_size(self, limits.message_bytes)
+        // The brief has an independent budget; do not consume the investor's message allowance.
+        let mut without_brief = self.clone();
+        without_brief.research_brief = None;
+        crate::agent_contract::check_serialized_size(&without_brief, limits.message_bytes)
+    }
+    pub fn encoded_limit(&self, limits: &ConversationLimits) -> usize {
+        if limits.context_bytes == isize::MAX as usize {
+            return isize::MAX as usize;
+        }
+        limits.message_bytes
+            + if self.research_brief.is_some() {
+                6 * 24 * 1024 + 32
+            } else {
+                0
+            }
     }
 }
 

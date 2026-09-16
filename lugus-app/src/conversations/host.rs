@@ -204,6 +204,9 @@ impl ConversationHost {
             .snapshot()
             .unwrap_or_else(|| self.inner.factory.clone());
         let mut options = self.inner.options.clone();
+        if let Some(enabled) = factory.web_search() {
+            options.allow_web_search = enabled;
+        }
         if let Some(timeout) = factory.run_timeout() {
             if timeout.is_zero() {
                 return Err(failure(
@@ -218,10 +221,7 @@ impl ConversationHost {
             Interpretation::Custom(interpreter) => Some(interpreter.clone()),
             Interpretation::Runtime => Some(Arc::new(crate::research::RuntimeInterpreter::new(
                 factory.clone(),
-                options
-                    .run_limits
-                    .timeout
-                    .min(std::time::Duration::from_secs(60)),
+                options.run_limits.timeout,
                 std::time::Duration::from_millis(self.inner.limits.runtime_close_timeout_ms),
             ))
                 as Arc<dyn crate::research::Interpreter>),
@@ -544,6 +544,7 @@ mod tests {
         let host = ConversationHost::recover(app).await.unwrap();
         let c = host.create("create", "Research").await.unwrap();
         let request = SendMessageRequest {
+            research_brief: None,
             company_hint: None,
             conversation_id: c.id.clone(),
             request_id: "one".into(),

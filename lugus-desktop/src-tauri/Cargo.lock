@@ -1913,9 +1913,11 @@ name = "lugus-desktop"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "lugus-agent",
  "lugus-app",
  "lugus-financial",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

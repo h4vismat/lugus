@@ -75,6 +75,21 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// No desktop research size or elapsed-time quotas. Read pages and queues
+    /// stay finite so consumers can paginate and apply backpressure.
+    pub fn unlimited_research() -> Self {
+        let mut limits = Self::default();
+        limits.operation_timeout = Duration::MAX;
+        limits.max_pages_per_fetch = isize::MAX as usize;
+        limits.max_items_per_fetch = isize::MAX as usize;
+        limits.max_bytes_per_fetch = isize::MAX as usize;
+        limits.max_document_bytes = isize::MAX as usize;
+        limits.max_input_bytes = isize::MAX as usize;
+        limits.max_output_bytes = isize::MAX as usize;
+        limits.max_read_page_bytes = isize::MAX as usize;
+        limits
+    }
+
     pub const MAX_QUEUE_CAPACITY: usize = 100_000;
     pub const MAX_CONCURRENT_JOBS: usize = 1_024;
     pub const MAX_OPERATION_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
@@ -86,16 +101,24 @@ impl Limits {
     pub fn validate(&self) -> Result<()> {
         if (1..=Self::MAX_QUEUE_CAPACITY).contains(&self.queue_capacity)
             && (1..=Self::MAX_CONCURRENT_JOBS).contains(&self.max_concurrent_jobs)
-            && (Duration::from_nanos(1)..=Self::MAX_OPERATION_TIMEOUT)
+            && ((Duration::from_nanos(1)..=Self::MAX_OPERATION_TIMEOUT)
                 .contains(&self.operation_timeout)
-            && (1..=Self::MAX_PAGES_PER_FETCH).contains(&self.max_pages_per_fetch)
-            && (1..=Self::MAX_ITEMS_PER_FETCH).contains(&self.max_items_per_fetch)
-            && (1..=Self::MAX_BYTES).contains(&self.max_bytes_per_fetch)
-            && (1..=Self::MAX_BYTES).contains(&self.max_document_bytes)
-            && (1..=Self::MAX_BYTES).contains(&self.max_input_bytes)
-            && (Self::MIN_OUTPUT_BYTES..=Self::MAX_BYTES).contains(&self.max_output_bytes)
+                || self.operation_timeout == Duration::MAX)
+            && ((1..=Self::MAX_PAGES_PER_FETCH).contains(&self.max_pages_per_fetch)
+                || self.max_pages_per_fetch == isize::MAX as usize)
+            && ((1..=Self::MAX_ITEMS_PER_FETCH).contains(&self.max_items_per_fetch)
+                || self.max_items_per_fetch == isize::MAX as usize)
+            && ((1..=Self::MAX_BYTES).contains(&self.max_bytes_per_fetch)
+                || self.max_bytes_per_fetch == isize::MAX as usize)
+            && ((1..=Self::MAX_BYTES).contains(&self.max_document_bytes)
+                || self.max_document_bytes == isize::MAX as usize)
+            && ((1..=Self::MAX_BYTES).contains(&self.max_input_bytes)
+                || self.max_input_bytes == isize::MAX as usize)
+            && ((Self::MIN_OUTPUT_BYTES..=Self::MAX_BYTES).contains(&self.max_output_bytes)
+                || self.max_output_bytes == isize::MAX as usize)
             && (1..=Self::MAX_ITEMS_PER_FETCH).contains(&self.max_read_page_items)
-            && (1..=Self::MAX_BYTES).contains(&self.max_read_page_bytes)
+            && ((1..=Self::MAX_BYTES).contains(&self.max_read_page_bytes)
+                || self.max_read_page_bytes == isize::MAX as usize)
             && self.max_document_bytes <= self.max_bytes_per_fetch
             && self.max_read_page_items <= self.max_items_per_fetch
             && self.max_read_page_bytes <= self.max_output_bytes
