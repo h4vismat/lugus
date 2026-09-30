@@ -58,6 +58,13 @@ export function SourceDetails({
         </DialogHeader>
         {row && (
           <>
+            {[
+              ...row.annual.issues,
+              ...row.annual.revenue.issues,
+              ...row.annual.net_income.issues,
+            ].map((issue, i) => (
+              <p key={i}>{issue.detail}</p>
+            ))}
             <div className="comparison-formulas">
               {[
                 ["Revenue growth", row.annual.revenue_growth],

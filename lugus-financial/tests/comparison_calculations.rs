@@ -153,3 +153,28 @@ fn warns_about_period_length_without_annualizing() {
             .any(|i| i.code == "period_length_difference")
     );
 }
+#[test]
+fn original_numeric_limits_survive_equivalent_canonical_values() {
+    for raw in [
+        format!("{}1", "0".repeat(128)),
+        "1.0000000000000000000".into(),
+    ] {
+        for duplicate in [false, true] {
+            let mut facts = vec![
+                revenue(1, 2023, "1"),
+                revenue(2, 2024, &raw),
+                fact(3, 2024, "NetIncomeLoss", "1"),
+            ];
+            if duplicate {
+                facts.push(revenue(4, 2024, "1"));
+            }
+            let selected = selected(&facts);
+            let result = calculate_annual(&selected, &policy()).unwrap();
+            let row = result.last().unwrap();
+            assert!(row.net_margin.result.is_none(), "{raw}");
+            assert_eq!(row.net_margin.issues[0].code, "numeric_limit");
+            assert_eq!(row.revenue_growth.issues[0].code, "numeric_limit");
+            assert_eq!(row.period.revenue.value.as_ref().unwrap().as_str(), raw);
+        }
+    }
+}

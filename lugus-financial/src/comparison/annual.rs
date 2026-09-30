@@ -42,7 +42,24 @@ fn amount(rows: &[&FactInput], concept: &str, ambiguous: bool) -> SelectedAmount
         ));
         None
     } else if let Some(value) = values.first() {
-        Some(Decimal::new(value.clone()).expect("canonical validated decimal"))
+        // Numeric equality must not erase an original operand's precision limit.
+        let oversized = found
+            .iter()
+            .map(|r| &r.evidence.value.value)
+            .filter(|v| {
+                v.as_str().len() > 128 || v.as_str().split('.').nth(1).map_or(0, str::len) > 18
+            })
+            .min_by_key(|v| v.as_str());
+        if let Some(raw) = oversized {
+            issues.push(ComparisonIssue::new(
+                "numeric_limit",
+                "An original reported operand exceeds supported calculation precision",
+                inputs.clone(),
+            ));
+            Some(raw.clone())
+        } else {
+            Some(Decimal::new(value.clone()).expect("canonical validated decimal"))
+        }
     } else {
         issues.push(ComparisonIssue::new(
             "missing_data",

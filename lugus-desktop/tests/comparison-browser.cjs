@@ -218,6 +218,27 @@ const server = http.createServer(async (req, res) => {
       await inspect.evaluate((el) => el === document.activeElement),
       true,
     );
+    await rpc(JSON.stringify({ qa_mode: "conflict" }));
+    await page
+      .getByRole("button", { name: "Refresh comparison", exact: true })
+      .click();
+    await table
+      .getByText("Latest filing date contains disagreeing values", {
+        exact: true,
+      })
+      .waitFor({ timeout: 5000 });
+    await table
+      .getByText("No eligible observation for the selected concept", {
+        exact: true,
+      })
+      .waitFor();
+    await inspect.click();
+    await details
+      .getByText("Latest filing date contains disagreeing values", {
+        exact: true,
+      })
+      .waitFor();
+    await details.getByRole("button", { name: "Close", exact: true }).click();
     await rpc(JSON.stringify({ qa_mode: "offline" }));
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page

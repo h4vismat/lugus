@@ -81,6 +81,10 @@ impl ComparisonStore for SqliteApplicationStore {
             error: None,
             owner: ComparisonOwner::None,
         };
+        crate::agent_contract::check_serialized_size(
+            &job,
+            self.limits.max_output_bytes.saturating_sub(128),
+        )?;
         let input = encode(self, r)?;
         let payload = encode(self, &job)?;
         self.connection.execute("INSERT INTO comparison_jobs(id,workspace,repository,request,input,state,payload) VALUES(?1,?2,?3,?4,?5,'running',?6)",params![job.id,s.workspace_id,job.repository_id,r.request_id,input,payload]).map_err(|e|if matches!(e,rusqlite::Error::SqliteFailure(_, _)){conflict()}else{storage(e)})?;
@@ -88,7 +92,7 @@ impl ComparisonStore for SqliteApplicationStore {
     }
     fn record_fetch(&mut self, s: &Scope, id: &str, f: &FetchReference) -> Result<()> {
         let owned = self.read_fetch(s, &f.id)?;
-        let mut j = self.job(s, id)?;
+        let mut j = self.comparison_internal_job(s, id)?;
         if !j.state.terminal() && !j.fetch_ids.contains(&owned.id) {
             j.fetch_ids.push(owned.id);
             self.save_comparison_job(&j)?;
@@ -108,7 +112,7 @@ impl ComparisonStore for SqliteApplicationStore {
         ) {
             return Err(crate::comparison::invalid("invalid terminal transition"));
         }
-        let mut j = self.job(s, id)?;
+        let mut j = self.comparison_internal_job(s, id)?;
         if !j.state.terminal() {
             j.state = state;
             j.error = error;
@@ -133,7 +137,7 @@ impl ComparisonStore for SqliteApplicationStore {
             .map(|v| v.into_iter().collect())
     }
     fn publish(&mut self, s: &Scope, id: &str, p: &PreparedComparison) -> Result<ComparisonJob> {
-        let mut job = self.job(s, id)?;
+        let mut job = self.comparison_internal_job(s, id)?;
         if job.state.terminal() {
             return Ok(job);
         }
@@ -187,6 +191,11 @@ impl ComparisonStore for SqliteApplicationStore {
             created_at: now,
             issues: p.issues.clone(),
         };
+        crate::agent_contract::check_serialized_size(&package, self.limits.max_output_bytes)?;
+        crate::agent_contract::check_serialized_size(
+            &record,
+            self.limits.max_output_bytes.saturating_sub(128),
+        )?;
         let package_json = encode(self, &package)?;
         let record_json = encode(self, &record)?;
         let mut entries = vec![];
@@ -226,6 +235,7 @@ impl ComparisonStore for SqliteApplicationStore {
         job.comparison_id = Some(comparison_id.clone());
         job.finished_at = Some(now);
         job.owner = ComparisonOwner::None;
+        crate::agent_contract::check_serialized_size(&job, self.limits.max_output_bytes)?;
         let job_json = encode(self, &job)?;
         let tx = self
             .connection

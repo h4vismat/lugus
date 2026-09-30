@@ -12,7 +12,7 @@ async fn main() {
         let command: serde_json::Value = serde_json::from_str(&line).expect("json");
         let result = if let Some(mode) = command.get("qa_mode").and_then(|v| v.as_str()) {
             match mode {
-                "changed" | "partial" => {
+                "changed" | "partial" | "conflict" => {
                     std::fs::write(root.join("provider").join(mode), "").unwrap()
                 }
                 "offline" => {

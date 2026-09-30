@@ -31,7 +31,23 @@ export class ComparisonController {
   private generation = 0;
   private selection = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private retry: { key: string; request: Request } | null = null;
+  private disposed = false;
+  private sessions = new Map<
+    string,
+    {
+      retry: { key: string; request: Request } | null;
+      job: Job | null;
+      submitting: boolean;
+    }
+  >();
+  private session(conversation: string) {
+    let session = this.sessions.get(conversation);
+    if (!session) {
+      session = { retry: null, job: null, submitting: false };
+      this.sessions.set(conversation, session);
+    }
+    return session;
+  }
   private state: State = {
     conversation: "",
     subjectHint: "",
@@ -84,7 +100,7 @@ export class ComparisonController {
     const g = ++this.generation;
     this.selection++;
     if (this.timer) clearTimeout(this.timer);
-    this.retry = null;
+    const session = this.session(conversation);
     this.patch({
       conversation,
       subjectHint,
@@ -92,8 +108,8 @@ export class ComparisonController {
       selected: null,
       rows: [],
       sources: [],
-      job: null,
-      busy: false,
+      job: session.job,
+      busy: session.submitting || session.job?.state === "running",
       loading: true,
       error: "",
     });
@@ -113,6 +129,8 @@ export class ComparisonController {
     });
     if (records.status === "fulfilled" && records.value[0])
       await this.select(records.value[0].id);
+    if (g === this.generation && session.job?.state === "running")
+      await this.poll(session.job.id, g, this.selection);
   };
   select = async (id: string) => {
     const g = this.generation;
@@ -134,37 +152,56 @@ export class ComparisonController {
   };
   create = async (input: Input) => {
     if (this.state.busy) return;
-    const g = this.generation;
+    const conversation = this.state.conversation;
+    const session = this.session(conversation);
+    const g = this.generation,
+      selection = this.selection;
     const key = JSON.stringify(input);
-    if (!this.retry || this.retry.key !== key)
-      this.retry = {
+    if (!session.retry || session.retry.key !== key)
+      session.retry = {
         key,
         request: { ...input, request_id: crypto.randomUUID() },
       };
-    const request = this.retry.request;
-    const conversation = this.state.conversation;
+    const request = session.retry.request;
+    session.submitting = true;
     this.patch({ busy: true, error: "" });
     try {
       const job = await this.api<Job>({ kind: "start", conversation, request });
-      if (g !== this.generation) return;
-      this.retry = null;
-      await this.acceptJob(job, g, this.selection);
+      session.retry = null;
+      session.job = job;
+      session.submitting = false;
+      if (!this.disposed && conversation === this.state.conversation)
+        await this.acceptJob(
+          job,
+          this.generation,
+          g === this.generation ? selection : this.selection,
+        );
     } catch (e) {
-      if (g === this.generation) this.patch({ busy: false, error: message(e) });
+      session.submitting = false;
+      if (!this.disposed && conversation === this.state.conversation)
+        this.patch({
+          busy: session.job?.state === "running",
+          error: message(e),
+        });
     }
   };
   refresh = async (record: Record) => {
-    this.retry = null;
     const { request_id: _, ...input } = record.request;
     await this.create({ ...input, previous_id: record.id });
   };
+  private schedule(id: string, g: number, selection: number, delay = 200) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      void this.poll(id, g, selection);
+    }, delay);
+  }
   private async acceptJob(job: Job, g: number, selection: number) {
     if (g !== this.generation) return;
-    this.patch({ job, busy: job.state === "running" });
+    this.session(this.state.conversation).job = job;
+    this.patch({ job, busy: job.state === "running", error: "" });
+    if (this.timer) clearTimeout(this.timer);
     if (job.state === "running") {
-      this.timer = setTimeout(() => {
-        void this.poll(job.id, g, selection);
-      }, 200);
+      this.schedule(job.id, g, selection);
       return;
     }
     if (job.comparison_id) {
@@ -182,6 +219,7 @@ export class ComparisonController {
     } else if (job.error) this.patch({ error: job.error.message });
   }
   private async poll(id: string, g: number, selection: number) {
+    if (g !== this.generation || this.disposed) return;
     try {
       const job = await this.api<Job>({
         kind: "status",
@@ -191,7 +229,8 @@ export class ComparisonController {
       await this.acceptJob(job, g, selection);
     } catch (e) {
       if (g === this.generation) {
-        this.patch({ busy: false, error: message(e) });
+        this.patch({ busy: true, error: message(e) });
+        this.schedule(id, g, selection, 1000);
       }
     }
   }
@@ -211,6 +250,7 @@ export class ComparisonController {
     }
   };
   dispose = () => {
+    this.disposed = true;
     this.generation++;
     this.selection++;
     if (this.timer) clearTimeout(this.timer);

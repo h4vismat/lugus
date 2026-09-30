@@ -28,6 +28,19 @@ impl SqliteApplicationStore {
         s: &Scope,
         id: &str,
     ) -> Result<T> {
+        self.comparison_header_with_limit(table, s, id, self.limits.max_output_bytes)
+    }
+    // Lifecycle transitions must still work after response limits are lowered.
+    fn comparison_internal_job(&self, s: &Scope, id: &str) -> Result<ComparisonJob> {
+        self.comparison_header_with_limit("comparison_jobs", s, id, usize::MAX)
+    }
+    fn comparison_header_with_limit<T: DeserializeOwned>(
+        &self,
+        table: &str,
+        s: &Scope,
+        id: &str,
+        cap: usize,
+    ) -> Result<T> {
         s.validate()?;
         crate::conversations::validate_id(id)?;
         let repo = self.evidence.repository_identity()?;
@@ -39,7 +52,7 @@ impl SqliteApplicationStore {
             .query_row(&sql, params![id, s.workspace_id, repo], |r| r.get(0))
             .optional()
             .map_err(storage)?;
-        if size.ok_or_else(scoped)? as u64 > self.limits.max_output_bytes as u64 {
+        if size.ok_or_else(scoped)? as u64 > cap as u64 {
             return Err(limit());
         }
         let sql =

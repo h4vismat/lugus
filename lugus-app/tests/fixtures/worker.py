@@ -157,6 +157,10 @@ for line in sys.stdin:
             for concept,value in [('RevenueFromContractWithCustomerExcludingAssessedTax',amount),('NetIncomeLoss',10)]:
                 values.append(dict(company=params['company'],namespace='us-gaap',concept=concept,label=None,value=str(value),unit='USD',period=dict(kind='duration',start=f'{year}-01-01',end=f'{year}-12-31'),filing_id=f'filing-{year}',form='10-K',filed='2025-02-01',fiscal_year=2024,fiscal_period='FY',source_url='https://fixture.test/comparison',retrieved_at='2026-09-30T00:00:00Z'))
         if (mode=='apple_comparison_partial' or (qa_root / 'partial').exists()) and params['company']['value']=='0000789019': values=[]
+        if (qa_root / 'conflict').exists() and values:
+            conflicting = dict(values[-2]); conflicting['value'] = str(int(conflicting['value']) + 1)
+            values = [v for v in values if not (v['concept'] == 'NetIncomeLoss' and v['period']['end'] == '2024-12-31')]
+            values.append(conflicting)
         offset=int(params.get('cursor') or '0')
         result={'items':values[offset:offset+2],'next_cursor':str(offset+2) if offset+2<len(values) else None}
     print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)

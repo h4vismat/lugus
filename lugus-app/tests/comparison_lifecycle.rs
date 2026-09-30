@@ -157,3 +157,78 @@ async fn timeout_cleans_child_and_no_same_company_financial_fetch() {
     assert!(!h.root.path().join("sec/comparison-facts").exists());
     h.app.shutdown().await.unwrap();
 }
+#[tokio::test]
+async fn dropping_an_admitted_caller_keeps_retrieval_owned_and_replayable() {
+    let h = Harness::with_plugin(
+        &[("sec", "apple_comparison_blocked")],
+        HostBounds::default(),
+        Limits::default(),
+        "sec-edgar",
+        "0.3.0",
+    )
+    .await;
+    let app = h.app.clone();
+    let sc = h.scope("dropped");
+    let caller_scope = sc.clone();
+    let caller = tokio::spawn(async move {
+        let receipt = app
+            .start_comparison(&caller_scope, request("dropped"))
+            .await
+            .unwrap();
+        // The transport no longer consumes its response while retrieval runs.
+        std::future::pending::<()>().await;
+        receipt
+    });
+    h.barrier("sec", "comparison-facts").await;
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    let replay = h
+        .app
+        .start_comparison(&sc, request("dropped"))
+        .await
+        .unwrap();
+    assert_eq!(replay.state, ComparisonState::Running);
+    std::fs::write(h.root.path().join("sec/release"), "").unwrap();
+    let done = terminal(&h.app, &sc, &replay.id).await;
+    assert_eq!(done.state, ComparisonState::Complete);
+    assert_eq!(
+        h.app
+            .start_comparison(&sc, request("dropped"))
+            .await
+            .unwrap()
+            .id,
+        replay.id
+    );
+    h.app.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn publication_winning_cancellation_retains_the_immutable_result() {
+    let h = Harness::with_plugin(
+        &[("sec", "apple_comparison")],
+        HostBounds::default(),
+        Limits::default(),
+        "sec-edgar",
+        "0.3.0",
+    )
+    .await;
+    let sc = h.scope("published");
+    let j = h
+        .app
+        .start_comparison(&sc, request("published"))
+        .await
+        .unwrap();
+    let done = terminal(&h.app, &sc, &j.id).await;
+    let id = done.comparison_id.as_ref().unwrap();
+    let before = h.app.read_comparison(&sc, id).await.unwrap();
+    h.app.cancel_comparison(&sc, &j.id).await.unwrap();
+    let after = h.app.comparison_status(&sc, &j.id).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(&done).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(h.app.read_comparison(&sc, id).await.unwrap()).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    h.app.shutdown().await.unwrap();
+}

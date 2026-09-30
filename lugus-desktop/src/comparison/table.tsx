@@ -51,11 +51,17 @@ export function ComparisonTable({
                         {row.annual.revenue.value === null
                           ? "—"
                           : formatReported(row.annual.revenue.value)}
+                        {row.annual.revenue.issues.map((issue, i) => (
+                          <small key={i}>{issue.detail}</small>
+                        ))}
                       </td>
                       <td>
                         {row.annual.net_income.value === null
                           ? "—"
                           : formatReported(row.annual.net_income.value)}
+                        {row.annual.net_income.issues.map((issue, i) => (
+                          <small key={i}>{issue.detail}</small>
+                        ))}
                       </td>
                       <td>
                         {formatCalculated(

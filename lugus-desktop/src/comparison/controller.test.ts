@@ -88,3 +88,128 @@ test("opening saved research only reads and stale responses cannot replace anoth
   assert(!calls.includes("start"));
   c.dispose();
 });
+function pendingJob() {
+  return { id: "active", state: "running", comparison_id: null, error: null };
+}
+function commands(raw: object) {
+  return (raw as { command: Record<string, unknown> }).command;
+}
+async function tick() {
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
+test("a lost refresh response reuses its request until a receipt arrives", async () => {
+  const sent: Record<string, unknown>[] = [];
+  let lost = true;
+  const rpc: Rpc = async <T>(raw: object) => {
+    const cmd = commands(raw);
+    if (cmd.kind === "start") {
+      sent.push(cmd.request as Record<string, unknown>);
+      if (lost) throw Error("Response lost");
+      return { ...pendingJob(), state: "cancelled" } as T;
+    }
+    if (cmd.kind === "providers") return { facts: [], resolution: [] } as T;
+    return empty as T;
+  };
+  const c = new ComparisonController(rpc);
+  try {
+    await c.open("a", "AAPL");
+    await c.refresh(record("saved"));
+    lost = false;
+    await c.refresh(record("saved"));
+    assert.equal(sent[0].request_id, sent[1].request_id);
+    await c.refresh(record("saved"));
+    assert.notEqual(sent[1].request_id, sent[2].request_id);
+  } finally {
+    c.dispose();
+  }
+});
+test("status failures retain progress and cancellation, then reconnect", async () => {
+  let statuses = 0,
+    cancelled = false;
+  const rpc: Rpc = async <T>(raw: object) => {
+    const cmd = commands(raw);
+    if (cmd.kind === "start") return pendingJob() as T;
+    if (cmd.kind === "status") {
+      statuses++;
+      if (statuses === 1) throw Error("Temporary disconnect");
+      return {
+        ...pendingJob(),
+        state: cancelled ? "cancelled" : "running",
+      } as T;
+    }
+    if (cmd.kind === "cancel") {
+      cancelled = true;
+      return {} as T;
+    }
+    if (cmd.kind === "providers") return { facts: [], resolution: [] } as T;
+    return empty as T;
+  };
+  const c = new ComparisonController(rpc);
+  try {
+    await c.open("a", "AAPL");
+    await c.create(input);
+    await tick();
+    assert.equal(c.getSnapshot().busy, true);
+    await new Promise((r) => setTimeout(r, 1100));
+    assert(statuses >= 2);
+    await c.cancel();
+    assert.equal(c.getSnapshot().job?.state, "cancelled");
+    assert.equal(c.getSnapshot().busy, false);
+  } finally {
+    c.dispose();
+  }
+});
+test("reopening a company resumes its active job after visiting another company", async () => {
+  let statuses = 0;
+  const rpc: Rpc = async <T>(raw: object) => {
+    const cmd = commands(raw);
+    if (cmd.kind === "start") return pendingJob() as T;
+    if (cmd.kind === "status") {
+      statuses++;
+      assert.equal(cmd.conversation, "a");
+      return pendingJob() as T;
+    }
+    if (cmd.kind === "providers") return { facts: [], resolution: [] } as T;
+    return empty as T;
+  };
+  const c = new ComparisonController(rpc);
+  try {
+    await c.open("a", "AAPL");
+    await c.create(input);
+    await c.open("a", "AAPL");
+    assert.equal(c.getSnapshot().job?.id, "active");
+    assert.equal(c.getSnapshot().busy, true);
+    await c.open("b", "MSFT");
+    assert.equal(c.getSnapshot().job, null);
+    await c.open("a", "AAPL");
+    await tick();
+    assert.equal(c.getSnapshot().job?.id, "active");
+    assert(statuses > 0);
+  } finally {
+    c.dispose();
+  }
+});
+test("a delayed admission receipt remains discoverable after switching companies", async () => {
+  let release!: (value: unknown) => void;
+  const rpc: Rpc = async <T>(raw: object) => {
+    const cmd = commands(raw);
+    if (cmd.kind === "start")
+      return (await new Promise<unknown>((r) => (release = r))) as T;
+    if (cmd.kind === "status") return pendingJob() as T;
+    if (cmd.kind === "providers") return { facts: [], resolution: [] } as T;
+    return empty as T;
+  };
+  const c = new ComparisonController(rpc);
+  try {
+    await c.open("a", "AAPL");
+    const start = c.create(input);
+    await c.open("b", "MSFT");
+    release(pendingJob());
+    await start;
+    assert.equal(c.getSnapshot().job, null);
+    await c.open("a", "AAPL");
+    assert.equal(c.getSnapshot().job?.id, "active");
+  } finally {
+    c.dispose();
+  }
+});
