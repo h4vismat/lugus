@@ -39,3 +39,5 @@ pub mod passages;
 pub mod research;
 
 pub mod portfolio;
+
+pub mod comparison;

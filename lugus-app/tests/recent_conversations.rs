@@ -146,7 +146,7 @@ fn v4_migration_backfills_recency_without_changing_existing_records() {
         DROP TRIGGER conversation_recency_create;
         DROP TRIGGER conversation_recency_message;
         DROP TABLE conversation_recency;
-        PRAGMA user_version=4;",
+        DROP TABLE IF EXISTS comparison_dependencies; DROP TABLE IF EXISTS comparison_entries; DROP TABLE IF EXISTS comparison_records; DROP TABLE IF EXISTS research_packages; DROP TABLE IF EXISTS comparison_jobs; PRAGMA user_version=4;",
     )
     .unwrap();
     let reopened = legacy_store(&path, &fin);
@@ -165,7 +165,7 @@ fn v4_migration_backfills_recency_without_changing_existing_records() {
     assert_eq!(
         sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 }
 

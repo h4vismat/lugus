@@ -82,7 +82,7 @@ impl SqliteApplicationStore {
                 ));
             }
             tx.execute_batch("CREATE TABLE app_records(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repository TEXT NOT NULL,category TEXT NOT NULL,payload TEXT NOT NULL); CREATE TABLE dataset_rows(dataset_id TEXT NOT NULL REFERENCES app_records(id),ordinal INTEGER NOT NULL,payload TEXT NOT NULL,observation_id INTEGER,PRIMARY KEY(dataset_id,ordinal)); CREATE TABLE view_requests(workspace TEXT NOT NULL,request TEXT NOT NULL,input TEXT NOT NULL,view_id TEXT NOT NULL REFERENCES app_records(id),PRIMARY KEY(workspace,request)); PRAGMA application_id=1280657235; PRAGMA user_version=1;").map_err(storage)?;
-        } else if !(1..=8).contains(&version) || application != 1280657235 {
+        } else if !(1..=9).contains(&version) || application != 1280657235 {
             return Err(error(
                 ErrorKind::Storage,
                 "unsupported application database schema",
@@ -108,6 +108,10 @@ impl SqliteApplicationStore {
         }
         if version < 8 {
             tx.execute_batch(include_str!("portfolio/history-v8.sql"))
+                .map_err(storage)?;
+        }
+        if version < 9 {
+            tx.execute_batch(include_str!("comparison/schema-v9.sql"))
                 .map_err(storage)?;
         }
         let mut stored_limits = super::conversations::configured_limits(&tx)?;
@@ -210,6 +214,13 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     }
 }
 impl ApplicationStore for SqliteApplicationStore {
+    fn comparison_store(&self) -> Result<&dyn crate::comparison::ComparisonStore> {
+        Ok(self)
+    }
+    fn comparison_store_mut(&mut self) -> Result<&mut dyn crate::comparison::ComparisonStore> {
+        Ok(self)
+    }
+
     fn history_evidence_page(
         &self,
         scope: &Scope,
