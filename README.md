@@ -4,6 +4,8 @@ Lugus is a financial research application that combines agent-assisted chat, com
 
 > **Alpha — not ready for production use.** Lugus is under active development. Expect updates and breaking changes to features, APIs, configuration, and stored-data formats. Backward compatibility is not guaranteed during the alpha.
 
+The [research harness roadmap](docs/research-harness-roadmap.md) records the completed comparison foundation and the next work on tracked thesis claims, evidence-backed reviews, and runtime reanalysis, including code locations and acceptance criteria for contributors and agents.
+
 ## What it does
 
 - Tracks USD stock, ETF and cash portfolios from transactions or opening lots, with FIFO P&L, allocation charts and historical performance against the S&P 500 total-return index.
