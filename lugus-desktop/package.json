@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "tauri": "tauri",
-    "test": "node --experimental-strip-types --test src/*.test.ts src/chat/*.test.ts src/portfolio/*.test.ts"
+    "test": "node --experimental-strip-types --test src/*.test.ts src/chat/*.test.ts src/portfolio/*.test.ts src/comparison/*.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

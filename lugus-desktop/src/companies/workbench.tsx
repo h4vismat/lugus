@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { ComparisonController } from "../comparison/controller";
+import { ComparisonPanel } from "../comparison/panel";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +37,10 @@ export function CompanyWorkbench({
   refresh: string;
 }) {
   const api = companyApi(rpc);
+  const comparison = useMemo(() => new ComparisonController(rpc), [rpc]);
+  const [comparing, setComparing] = useState(false);
+  useEffect(() => () => comparison.dispose(), [comparison]);
+  useEffect(() => { setComparing(false); }, [selected?.id]);
   const [company, setCompany] = useState<Company | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const drafts = useRef(new Map<string, Draft>());
@@ -249,6 +255,8 @@ export function CompanyWorkbench({
             <span className="evidence-note">
               Saved {date(company.updated_at)}
             </span>
+            <Button variant="outline" onClick={() => { void comparison.open(company.conversation_id, company.hint); setComparing(true); }}>Compare companies</Button>
+            <ComparisonPanel controller={comparison} open={comparing} onClose={() => setComparing(false)} />
             <Button onClick={() => onResearch()}>Research with agent</Button>
             <Button
               variant="outline"
