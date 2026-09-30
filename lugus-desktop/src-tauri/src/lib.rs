@@ -1,5 +1,6 @@
 //! Bounded native transport over the persisted application and conversation ports.
 mod companies;
+mod comparison;
 mod data_settings;
 mod portfolio;
 mod runtime;
@@ -21,6 +22,9 @@ struct DesktopConfig {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    Comparison {
+        command: comparison::Command,
+    },
     Company {
         command: companies::Command,
     },
@@ -279,6 +283,7 @@ impl Bridge {
             .map_err(|_| error(ErrorKind::InvalidInput, "invalid desktop command"))?;
         let app = self.host.application();
         let response = match command {
+            Command::Comparison { command } => comparison::dispatch(self, command).await?,
             Command::Company { command } => companies::dispatch(self, command).await?,
             Command::Portfolio { command } => portfolio::dispatch(app, command).await?,
             Command::Info => match &self.settings {

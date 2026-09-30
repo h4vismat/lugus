@@ -1934,6 +1934,8 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "num-bigint",
+ "num-traits",
  "rusqlite",
  "serde",
  "serde_json",
