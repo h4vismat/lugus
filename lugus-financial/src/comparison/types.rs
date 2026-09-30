@@ -102,3 +102,24 @@ pub struct AnnualSelection {
     pub periods: Vec<AnnualPeriod>,
     pub issues: Vec<ComparisonIssue>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PercentageResult {
+    pub numerator: String,
+    pub denominator: String,
+    pub value: Decimal,
+    pub display: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalculatedCell {
+    pub result: Option<PercentageResult>,
+    pub inputs: Vec<InputRef>,
+    pub formula: String,
+    pub issues: Vec<ComparisonIssue>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnualRow {
+    #[serde(flatten)]
+    pub period: AnnualPeriod,
+    pub revenue_growth: CalculatedCell,
+    pub net_margin: CalculatedCell,
+}
