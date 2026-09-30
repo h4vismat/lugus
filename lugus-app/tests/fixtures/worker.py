@@ -26,6 +26,13 @@ for line in sys.stdin:
                   'capabilities': {'historical_prices': 1, 'filings': 1, 'fundamentals': 1, 'company_resolution': 1, 'market_data': 1, 'instrument_lookup': 2 if mode == 'instrument_unsupported' else 1}}
     else:
         cursor = params.get('cursor')
+        if mode.startswith('apple_comparison') and method == 'fundamentals.facts':
+            (root / 'comparison-facts').touch()
+            if mode == 'apple_comparison_blocked':
+                while not (root / 'release').exists():
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.005)
+                    if ready and not os.read(sys.stdin.fileno(), 1): raise SystemExit(0)
+
         (root / ('second' if cursor else 'first')).touch()
         if method == 'market_data.daily': (root / 'prices-started').touch()
         if (mode == 'history_blocked' and method == 'historical_prices.daily') or (mode == 'apple_price_blocked' and method == 'market_data.daily') or mode == 'blocked' or (mode == 'search_blocked' and method == 'company_resolution.search') or (mode in ('second_blocked', 'repeated_cursor', 'market_repeated_date') and cursor):
@@ -55,7 +62,7 @@ for line in sys.stdin:
                 if mode == 'apple_multiple':
                     result['items'][0]['listings'].append({'ticker':{'namespace':'sec:ticker','value':'APPLB'},'exchange':{'namespace':'sec:exchange','value':'NYSE'}})
                 source_input = params['query'].get('text', params['query'].get('identifier', {}).get('value', '')).upper()
-                if mode == 'apple_compare' and (source_input in ('MSFT', '0000789019') or 'MICROSOFT' in source_input):
+                if (mode == 'apple_compare' or mode.startswith('apple_comparison')) and (source_input in ('MSFT', '0000789019') or 'MICROSOFT' in source_input):
                     result['items'][0].update(identifier={'namespace':'sec:cik','value':'0000789019'},name='Microsoft Corp.',listings=[{'ticker':{'namespace':'sec:ticker','value':'MSFT'},'exchange':{'namespace':'sec:exchange','value':'NASDAQ'}}])
                 if params['query']['kind'] == 'name' and params['query']['text'].casefold() == 'apple inc.':
                     result['items'][0]['match_reasons'] = ['exact_name']
@@ -70,7 +77,7 @@ for line in sys.stdin:
             result = {'identifier': params['identifier'], 'name': 'Fixture', 'aliases': [], 'listings': [], 'source_url': 'https://example.test/company', 'source_checksum': 'a' * 64, 'retrieved_at': '2026-09-09T00:00:00Z', 'match_reasons': []}
         elif method == 'instrument_lookup.lookup':
             result = {'instrument': {'namespace':'yahoo:symbol','value':'AAPL'},'issuer_name':'Apple Inc.','ticker':'AAPL','exchange':{'namespace':'yahoo:exchange','value':'NMS'},'kind':'equity','issuer_identifiers':[],'source_url':'https://example.test/instrument','source_checksum':'b'*64,'retrieved_at':'2026-09-09T00:00:00Z'}
-            if mode == 'apple_compare' and params['instrument']['value'] == 'MSFT':
+            if (mode == 'apple_compare' or mode.startswith('apple_comparison')) and params['instrument']['value'] == 'MSFT':
                 result.update(instrument={'namespace':'yahoo:symbol','value':'MSFT'},issuer_name='Microsoft Corp.',ticker='MSFT')
             if mode == 'apple_wrong_issuer': result['issuer_name'] = 'Another Issuer Inc.'
             if mode == 'apple_wrong_exchange': result['exchange']['value'] = 'NYQ'
@@ -142,4 +149,12 @@ for line in sys.stdin:
                 result['items'] *= 3
             if mode == 'large_bytes':
                 result['items'][0]['source_url'] += 'x' * 6000
+    if method == 'fundamentals.facts' and mode.startswith('apple_comparison'):
+        values=[]
+        for year, amount in [(2021,80),(2022,90),(2023,100),(2024,120)]:
+            for concept,value in [('RevenueFromContractWithCustomerExcludingAssessedTax',amount),('NetIncomeLoss',10)]:
+                values.append(dict(company=params['company'],namespace='us-gaap',concept=concept,label=None,value=str(value),unit='USD',period=dict(kind='duration',start=f'{year}-01-01',end=f'{year}-12-31'),filing_id=f'filing-{year}',form='10-K',filed='2025-02-01',fiscal_year=2024,fiscal_period='FY',source_url='https://fixture.test/comparison',retrieved_at='2026-09-30T00:00:00Z'))
+        if mode=='apple_comparison_partial' and params['company']['value']=='0000789019': values=[]
+        offset=int(params.get('cursor') or '0')
+        result={'items':values[offset:offset+2],'next_cursor':str(offset+2) if offset+2<len(values) else None}
     print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)

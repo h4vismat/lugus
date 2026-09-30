@@ -1,4 +1,5 @@
 //! Shared admission, lifecycle and supervised jobs. SQL always crosses a blocking boundary.
+mod comparison;
 mod history_evidence;
 use crate::*;
 mod bindings;
@@ -111,6 +112,7 @@ struct RegisteredJob {
     status: watch::Sender<JobStatus>,
 }
 struct Admission {
+    comparisons: BTreeMap<String, comparison::ComparisonExecution>,
     refreshes: BTreeMap<String, portfolio::PortfolioJob>,
     histories: BTreeMap<String, (String, portfolio::PortfolioJob)>,
     closed: bool,
@@ -222,6 +224,7 @@ impl Application {
             inner: Arc::new(Inner {
                 catalog: Arc::new(Mutex::new(catalog)),
                 admission: Mutex::new(Admission {
+                    comparisons: BTreeMap::new(),
                     refreshes: BTreeMap::new(),
                     histories: BTreeMap::new(),
                     closed: false,
@@ -665,6 +668,10 @@ impl Application {
                         job.done.clone()
                     })
                     .chain(state.histories.values().map(|(_, job)| {
+                        job.cancel.send_replace(true);
+                        job.done.clone()
+                    }))
+                    .chain(state.comparisons.values().map(|job| {
                         job.cancel.send_replace(true);
                         job.done.clone()
                     }))
