@@ -387,16 +387,15 @@ async fn previous_review(
         for review in history["reviews"].as_array().into_iter().flatten() {
             if let Some(run) = review["run_id"].as_str() {
                 let status = bridge.host.status(&company.conversation_id, run).await?;
-                if status.status == RunStatus::Completed {
-                    if let Some(message) = messages
+                if status.status == RunStatus::Completed
+                    && let Some(message) = messages
                         .iter()
                         .find(|m| m.run_id == run && m.role == MessageRole::Assistant)
-                    {
-                        let excerpt = message.text.clone();
-                        return Ok(Some(
-                            json!({"run_id":run,"created_at":message.created_at,"excerpt":excerpt,"truncated":false}),
-                        ));
-                    }
+                {
+                    let excerpt = message.text.clone();
+                    return Ok(Some(
+                        json!({"run_id":run,"created_at":message.created_at,"excerpt":excerpt,"truncated":false}),
+                    ));
                 }
             }
         }

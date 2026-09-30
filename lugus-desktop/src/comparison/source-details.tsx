@@ -1,8 +1,133 @@
-import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription} from '@/components/ui/dialog';
-import type {Row,Source} from './types';
-import {formatReported,formatCalculated} from './format';
-export function SourceDetails({row,sources,onClose}:{row:Row|null;sources:Source[];onClose:()=>void}){
- const refs=row?[...row.annual.revenue.inputs,...row.annual.net_income.inputs,...row.annual.revenue_growth.inputs,...row.annual.net_margin.inputs]:[];
- const selected=sources.filter(s=>refs.some(r=>r.dataset_id===s.input.dataset_id&&r.ordinal===s.input.ordinal));
- return <Dialog open={row!==null} onOpenChange={open=>{if(!open)onClose();}}><DialogContent className="comparison-source-dialog"><DialogHeader><DialogTitle>Comparison sources</DialogTitle><DialogDescription>Exact reported inputs and calculations for {row?.annual.end}. Source coverage and accounting comparability remain unverified.</DialogDescription></DialogHeader>{row&&<><div className="comparison-formulas">{[['Revenue growth',row.annual.revenue_growth],['Net margin',row.annual.net_margin]] .map(([name,raw])=>{const cell=raw as Row['annual']['net_margin'];return <section key={name as string}><h3>{name as string}: {formatCalculated(cell.result?.display??null)}</h3><p>{name==='Revenue growth'?'100 × (current revenue − prior revenue) / prior revenue':'100 × net income / revenue'}</p>{cell.result&&<p>Exact percentage ratio: {cell.result.numerator} / {cell.result.denominator}</p>}<small>{cell.formula} · ties-to-even rounding</small>{cell.issues.map((issue,i)=><p key={i}>{issue.detail}</p>)}</section>;})}</div>{selected.map(source=><article className="comparison-source" key={source.input.dataset_id+':'+source.input.ordinal}><h3>{source.fact.concept}</h3><p><strong>{formatReported(source.fact.value)} {source.fact.unit}</strong> · {source.fact.period.start} to {source.fact.period.end}</p><p>Filed {source.fact.filed} · accession {source.fact.filing_id}</p><p>Retrieved {new Date(source.fact.retrieved_at).toLocaleString()}</p>{/^https?:\/\//i.test(source.fact.source_url)&&<a href={source.fact.source_url} target="_blank" rel="noreferrer">Open original source</a>}<details><summary>Evidence identifiers</summary><p>Dataset: {source.input.dataset_id}</p><p>Observation: {source.input.observation_id}</p><p>Fingerprint: {source.input.fingerprint}</p></details></article>)}</>}</DialogContent></Dialog>;
+import { useRef } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import type { Row, Source } from "./types";
+import { formatReported, formatCalculated } from "./format";
+export function SourceDetails({
+  row,
+  sources,
+  onClose,
+}: {
+  row: Row | null;
+  sources: Source[];
+  onClose: () => void;
+}) {
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const refs = row
+    ? [
+        ...row.annual.revenue.inputs,
+        ...row.annual.net_income.inputs,
+        ...row.annual.revenue_growth.inputs,
+        ...row.annual.net_margin.inputs,
+      ]
+    : [];
+  const selected = sources.filter((s) =>
+    refs.some(
+      (r) =>
+        r.dataset_id === s.input.dataset_id && r.ordinal === s.input.ordinal,
+    ),
+  );
+  return (
+    <Dialog
+      open={row !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent
+        className="comparison-source-dialog"
+        onOpenAutoFocus={() => {
+          returnFocus.current = document.activeElement as HTMLElement;
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          returnFocus.current?.focus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Comparison sources</DialogTitle>
+          <DialogDescription>
+            Exact reported inputs and calculations for {row?.annual.end}. Source
+            coverage and accounting comparability remain unverified.
+          </DialogDescription>
+        </DialogHeader>
+        {row && (
+          <>
+            <div className="comparison-formulas">
+              {[
+                ["Revenue growth", row.annual.revenue_growth],
+                ["Net margin", row.annual.net_margin],
+              ].map(([name, raw]) => {
+                const cell = raw as Row["annual"]["net_margin"];
+                return (
+                  <section key={name as string}>
+                    <h3>
+                      {name as string}:{" "}
+                      {formatCalculated(cell.result?.display ?? null)}
+                    </h3>
+                    <p>
+                      {name === "Revenue growth"
+                        ? "100 × (current revenue − prior revenue) / prior revenue"
+                        : "100 × net income / revenue"}
+                    </p>
+                    {cell.result && (
+                      <p>
+                        Exact percentage ratio: {cell.result.numerator} /{" "}
+                        {cell.result.denominator}
+                      </p>
+                    )}
+                    <small>{cell.formula} · ties-to-even rounding</small>
+                    {cell.issues.map((issue, i) => (
+                      <p key={i}>{issue.detail}</p>
+                    ))}
+                  </section>
+                );
+              })}
+            </div>
+            {selected.map((source) => (
+              <article
+                className="comparison-source"
+                key={source.input.dataset_id + ":" + source.input.ordinal}
+              >
+                <h3>{source.fact.concept}</h3>
+                <p>
+                  <strong>
+                    {formatReported(source.fact.value)} {source.fact.unit}
+                  </strong>{" "}
+                  · {source.fact.period.start} to {source.fact.period.end}
+                </p>
+                <p>
+                  Filed {source.fact.filed} · accession {source.fact.filing_id}
+                </p>
+                <p>
+                  Retrieved{" "}
+                  {new Date(source.fact.retrieved_at).toLocaleString()}
+                </p>
+                {/^https?:\/\//i.test(source.fact.source_url) && (
+                  <a
+                    href={source.fact.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open original source
+                  </a>
+                )}
+                <details>
+                  <summary>Evidence identifiers</summary>
+                  <p>Dataset: {source.input.dataset_id}</p>
+                  <p>Observation: {source.input.observation_id}</p>
+                  <p>Fingerprint: {source.input.fingerprint}</p>
+                </details>
+              </article>
+            ))}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }

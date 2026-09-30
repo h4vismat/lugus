@@ -68,7 +68,17 @@ impl HistoryRepository for SqliteRepository {
     }
     fn save_history_page(&mut self, run: i64, page: &HistoryPage) -> Result<()> {
         let tx = self.connection.transaction()?;
-        let (provider,raw_query,status,old_manifest,cursor,seen,last_date,count):(String,String,String,Option<String>,Option<String>,String,Option<String>,i64)=tx.query_row(
+        type StoredRun = (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            i64,
+        );
+        let (provider,raw_query,status,old_manifest,cursor,seen,last_date,count):StoredRun=tx.query_row(
             "SELECT provider_id,query,status,manifest,cursor,seen_cursors,last_date,row_count FROM historical_runs WHERE id=?1",[run],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?)))?;
         if status != "running" || (old_manifest.is_some() && cursor.is_none()) {
@@ -77,10 +87,10 @@ impl HistoryRepository for SqliteRepository {
         let mut q: HistoryQuery = serde_json::from_str(&raw_query)?;
         q.cursor = cursor;
         page.validate_for(&q)?;
-        if let Some(m) = old_manifest {
-            if serde_json::from_str::<HistoryManifest>(&m)? != page.manifest {
-                return Err(invalid("historical manifest changed across pages"));
-            }
+        if let Some(m) = old_manifest
+            && serde_json::from_str::<HistoryManifest>(&m)? != page.manifest
+        {
+            return Err(invalid("historical manifest changed across pages"));
         }
         if let Some(last) = last_date {
             let last = last

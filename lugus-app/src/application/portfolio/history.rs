@@ -92,21 +92,18 @@ impl Application {
                 "historical endpoint cannot be in the future",
             ));
         }
-        if request.refresh == HistoryRefreshMode::Missing {
-            if let Some(cached) = self
+        if request.refresh == HistoryRefreshMode::Missing
+            && let Some(cached) = self
                 .portfolio_history_latest(
                     request.portfolio_id.clone(),
                     request.account_id.clone(),
                     request.range.clone(),
                 )
                 .await?
-            {
-                if cached.key == key
-                    && cached.created_at.with_timezone(&New_York).date_naive() == anchor
-                {
-                    return Ok(cached);
-                }
-            }
+            && cached.key == key
+            && cached.created_at.with_timezone(&New_York).date_naive() == anchor
+        {
+            return Ok(cached);
         }
         let p = request.portfolio_id.clone();
         let r = request.clone();
@@ -256,10 +253,11 @@ impl Application {
                 }
             }
             for event in &account.ledger.events {
-                if event.date <= request.range.end && matches!(event.kind, EventKind::Buy { .. }) {
-                    if let Some(id) = event.kind.instrument_id() {
-                        ids.insert(id.to_owned());
-                    }
+                if event.date <= request.range.end
+                    && matches!(event.kind, EventKind::Buy { .. })
+                    && let Some(id) = event.kind.instrument_id()
+                {
+                    ids.insert(id.to_owned());
                 }
             }
         }
@@ -580,14 +578,14 @@ impl Application {
         instrument_id: Option<String>,
         stop: &Stop,
     ) -> Result<(HistoryEvidenceRef, HistoryReadPage)> {
-        let fetch = self.read_fetch(&scope, &id).await?;
+        let fetch = self.read_fetch(scope, id).await?;
         if let Some(e) = fetch.error {
             return Err(e);
         }
         let mut page = self
             .history_evidence_page(
-                &scope,
-                &id,
+                scope,
+                id,
                 PageRequest {
                     offset: 0,
                     limit: 200,
@@ -597,7 +595,7 @@ impl Application {
         while let Some(offset) = page.next_offset {
             stop.check()?;
             let next = self
-                .history_evidence_page(&scope, &id, PageRequest { offset, limit: 200 })
+                .history_evidence_page(scope, id, PageRequest { offset, limit: 200 })
                 .await?;
             if page.items.len() != offset
                 || (self.limits().operation_timeout != std::time::Duration::MAX

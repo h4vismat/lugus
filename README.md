@@ -95,3 +95,9 @@ The [application guide](lugus-app/README.md#deterministic-cli-acceptance) includ
 Lugus is an evolving alpha research surface. Retrieval depends on explicitly configured provider capabilities and source coverage. Charts show historical observations, not live quotes. Reported metrics preserve source periods and units; they do not constitute reconciled financial statements or derived quarterly values.
 
 There is no automatic background data refresh, full filing-document renderer, or complete provider/model configuration UI. See the [desktop guide](lugus-desktop/README.md#current-limits) for further limitations and the component documentation for detailed contracts.
+
+### Saved company comparisons
+
+The desktop company workbench includes **Compare companies**, a financial-data workflow that runs without an agent or model. It resolves two companies, captures annual US-GAAP/USD observations, and saves revenue, net income, revenue growth, and net margin with inspectable sources and exact calculations. Creating or refreshing explicitly retrieves evidence; opening saved versions reads local databases. Refresh creates a new immutable version.
+
+Choose either contract revenue excluding assessed tax (`RevenueFromContractWithCustomerExcludingAssessedTax`) or reported revenues (`Revenues`); the harness never substitutes between them. Comparisons cover one to five actual fiscal periods (three by default), 350–380 days each, from FY 10-K/10-K/A disclosures within the existing ten-year retrieval window. This is **current disclosures for historical periods**, not a reconstruction of what investors knew at a past date. Missing/conflicting data and unavailable ratios remain explicit. Structured investment-thesis reviews and model-based package assessments are planned separately.

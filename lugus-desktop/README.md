@@ -240,3 +240,11 @@ node tests/company-workbench-browser.cjs
 ```
 
 Set `LUGUS_PLAYWRIGHT_MODULE` and `LUGUS_CHROMIUM` if needed. `LUGUS_COMPANY_QA_BINARY` overrides the QA executable path. The test covers company creation, brief persistence and history, draft isolation, explicit review, accepting a finding, source navigation, and narrow layouts without a live model or market provider.
+
+## Model-independent comparisons
+
+Open a company and select **Compare companies**. Configure the SEC EDGAR financial provider and a company-resolution provider in application settings; no agent runtime is required. Enter the second company, reporting endpoint, 1–5 annual periods, and either contract revenue excluding assessed tax or reported revenues. The first company defaults to the current workspace hint; both identities are verified by the application.
+
+The result shows actual fiscal dates, revenue, net income, revenue growth and net margin. Select a period ending date for exact reported values, filing/retrieval dates, source links, observation IDs, and formula policy. The two revenue definitions are never mixed. Only US-GAAP USD FY 10-K/10-K/A duration observations of 350–380 days qualify. The endpoint uses the existing ten-year retrieval window. Current disclosures may restate past periods; this is not a historical knowledge snapshot. Missing/conflicting inputs and unavailable ratios remain visible.
+
+**Create comparison** and **Refresh comparison** retrieve evidence. Opening a saved version reads local data, including offline. Refresh saves a separate immutable version; select any older version to inspect its original evidence. Company brief drafts remain intact when the panel opens or closes. Structured thesis claims/reviews and agent assessments of packages remain separate future work.

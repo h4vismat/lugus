@@ -1434,14 +1434,14 @@
 @media(max-width: 700px) { .company-workbench {padding:20px 16px;} .company-toolbar {align-items:flex-start; flex-direction:column;} .company-create {grid-template-columns:1fr;} .company-tabs button {font-size:12px;} }
 
 /* Saved financial comparisons */
-.comparison-dialog { width: calc(100vw - 2rem); max-width: 1180px !important; max-height: 92vh; overflow-y: auto; }
-.comparison-source-dialog { width: calc(100vw - 2rem); max-width: 760px !important; max-height: 88vh; overflow-y: auto; overflow-wrap: anywhere; }
+.comparison-dialog { width: calc(100vw - 2rem); max-width: min(1180px, calc(100% - 2rem)) !important; grid-template-columns: minmax(0, 1fr); max-height: 92vh; overflow-y: auto; }
+.comparison-source-dialog { width: calc(100vw - 2rem); max-width: min(760px, calc(100% - 2rem)) !important; grid-template-columns: minmax(0, 1fr); max-height: 88vh; overflow-y: auto; overflow-wrap: anywhere; }
 .comparison-form { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
 .comparison-form label, .comparison-actions label { display: grid; gap: 6px; font-size: 13px; }
 .comparison-wide { grid-column: 1 / -1; }
 .comparison-form select, .comparison-actions select { border: 1px solid var(--border); background: var(--background); border-radius: 6px; padding: 8px; min-width: 0; max-width: 100%; }
 .comparison-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
-.comparison-grid { display: grid; gap: 20px; }
+.comparison-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
 .comparison-company { border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
 .comparison-company h3, .comparison-source h3, .comparison-formulas h3 { font-weight: 600; }
 .comparison-table-scroll { overflow-x: auto; }

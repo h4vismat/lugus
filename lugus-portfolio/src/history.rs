@@ -135,7 +135,7 @@ fn holding_value(
         return Ok(Some(Decimal::zero()));
     }
     let found = prices.get(&(id, date));
-    let problem = bad.get(id).cloned().or_else(|| match found {
+    let problem = bad.get(id).cloned().or(match found {
         None => Some(HistoryIssueCode::UnknownCalendar),
         Some((None, _)) => Some(HistoryIssueCode::MissingPrice),
         _ => None,
@@ -233,26 +233,26 @@ pub fn historical_values_cancellable(
                 .into_iter()
                 .map(|(id, q)| (id.to_owned(), q))
                 .collect::<BTreeMap<_, _>>();
-            if date == ledger.start {
-                if let Opening::Existing { cash, lots } = &ledger.opening {
-                    let mut contribution = Some(cash.clone());
-                    for lot in lots {
-                        let value = match date.pred_opt() {
-                            Some(prior) => holding_value(
-                                &lot.instrument_id,
-                                &lot.quantity,
-                                prior,
-                                &ledger.account_id,
-                                &portfolio_prices,
-                                bad,
-                                &mut day,
-                            )?,
-                            None => None,
-                        };
-                        add(&mut contribution, value)?;
-                    }
-                    add(&mut day.opening_contribution, contribution)?;
+            if date == ledger.start
+                && let Opening::Existing { cash, lots } = &ledger.opening
+            {
+                let mut contribution = Some(cash.clone());
+                for lot in lots {
+                    let value = match date.pred_opt() {
+                        Some(prior) => holding_value(
+                            &lot.instrument_id,
+                            &lot.quantity,
+                            prior,
+                            &ledger.account_id,
+                            &portfolio_prices,
+                            bad,
+                            &mut day,
+                        )?,
+                        None => None,
+                    };
+                    add(&mut contribution, value)?;
                 }
+                add(&mut day.opening_contribution, contribution)?;
             }
             let mut ledger_splits = BTreeMap::<&str, Vec<(u64, u64)>>::new();
             for event in events.get(&date).into_iter().flatten() {
@@ -310,16 +310,14 @@ pub fn historical_values_cancellable(
             }
             add(&mut day.value, value)?;
         }
-        if let Some(id) = benchmark_id {
-            if let Some((Some(observed), calendar)) = benchmark.get(&(id, date)) {
-                if observed.close.as_ref().is_some_and(Decimal::is_positive)
-                    && calendar.unsupported_action.is_none()
-                {
-                    day.benchmark_level = observed.close.clone();
-                    day.observations.push(observed.observation_id.clone());
-                    day.observations.push(calendar.observation_id.clone());
-                }
-            }
+        if let Some(id) = benchmark_id
+            && let Some((Some(observed), calendar)) = benchmark.get(&(id, date))
+            && observed.close.as_ref().is_some_and(Decimal::is_positive)
+            && calendar.unsupported_action.is_none()
+        {
+            day.benchmark_level = observed.close.clone();
+            day.observations.push(observed.observation_id.clone());
+            day.observations.push(calendar.observation_id.clone());
         }
         if day.benchmark_level.is_none() {
             day.issues

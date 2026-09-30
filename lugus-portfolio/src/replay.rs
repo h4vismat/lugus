@@ -120,7 +120,7 @@ impl<'a> ReplayCursor<'a> {
             return Err(PortfolioError::Cancelled);
         }
         while let Some(event) = self.events.get(self.next).filter(|e| e.date <= day) {
-            if self.next % 1000 == 0 && cancelled() {
+            if self.next.is_multiple_of(1000) && cancelled() {
                 return Err(PortfolioError::Cancelled);
             }
             apply_event(&mut self.state, event, &mut self.ties, &mut self.actions)?;
