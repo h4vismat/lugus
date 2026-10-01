@@ -62,21 +62,22 @@ impl ConversationLimits {
     /// No research quotas beyond representable allocation/storage sizes.
     /// Pagination, concurrency, backpressure and shutdown grace remain finite.
     pub fn unlimited_research() -> Self {
-        let mut limits = Self::default();
-        limits.message_bytes = isize::MAX as usize;
-        limits.assistant_bytes = isize::MAX as usize;
-        limits.context_bytes = isize::MAX as usize;
-        limits.context_messages = isize::MAX as usize;
-        limits.selected_refs = isize::MAX as usize;
-        limits.selected_bytes = isize::MAX as usize;
-        limits.activity_events = isize::MAX as usize;
-        limits.activity_bytes = isize::MAX as usize;
-        limits.tool_calls = isize::MAX as usize;
-        limits.tool_record_bytes = isize::MAX as usize;
-        limits.tool_total_bytes = isize::MAX as usize;
-        limits.open_views = isize::MAX as usize;
-        limits.page_bytes = isize::MAX as usize;
-        limits
+        Self {
+            message_bytes: isize::MAX as usize,
+            assistant_bytes: isize::MAX as usize,
+            context_bytes: isize::MAX as usize,
+            context_messages: isize::MAX as usize,
+            selected_refs: isize::MAX as usize,
+            selected_bytes: isize::MAX as usize,
+            activity_events: isize::MAX as usize,
+            activity_bytes: isize::MAX as usize,
+            tool_calls: isize::MAX as usize,
+            tool_record_bytes: isize::MAX as usize,
+            tool_total_bytes: isize::MAX as usize,
+            open_views: isize::MAX as usize,
+            page_bytes: isize::MAX as usize,
+            ..Self::default()
+        }
     }
 
     /// Terminal metadata is charged separately from activity so an exhausted activity budget

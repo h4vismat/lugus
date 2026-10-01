@@ -1432,3 +1432,26 @@
 .company-navigation button span { overflow: hidden; text-overflow: ellipsis; }
 .save-finding { margin-top: 10px; }
 @media(max-width: 700px) { .company-workbench {padding:20px 16px;} .company-toolbar {align-items:flex-start; flex-direction:column;} .company-create {grid-template-columns:1fr;} .company-tabs button {font-size:12px;} }
+
+/* Saved financial comparisons */
+.comparison-dialog { width: calc(100vw - 2rem); max-width: min(1180px, calc(100% - 2rem)) !important; grid-template-columns: minmax(0, 1fr); max-height: 92vh; overflow-y: auto; }
+.comparison-source-dialog { width: calc(100vw - 2rem); max-width: min(760px, calc(100% - 2rem)) !important; grid-template-columns: minmax(0, 1fr); max-height: 88vh; overflow-y: auto; overflow-wrap: anywhere; }
+.comparison-form { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.comparison-form label, .comparison-actions label { display: grid; gap: 6px; font-size: 13px; }
+.comparison-wide { grid-column: 1 / -1; }
+.comparison-form select, .comparison-actions select { border: 1px solid var(--border); background: var(--background); border-radius: 6px; padding: 8px; min-width: 0; max-width: 100%; }
+.comparison-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.comparison-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.comparison-company { border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
+.comparison-company h3, .comparison-source h3, .comparison-formulas h3 { font-weight: 600; }
+.comparison-table-scroll { overflow-x: auto; }
+.comparison-company table { width: 100%; font-size: 13px; border-collapse: collapse; }
+.comparison-company th, .comparison-company td { padding: 12px 8px; text-align: right; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.comparison-company th:first-child { text-align: left; min-width: 175px; }
+.comparison-company small { display: block; font-size: 11px; font-weight: 400; max-width: 210px; }
+.comparison-inspect { text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.comparison-source { padding: 14px 0; border-top: 1px solid var(--border); }
+.comparison-source p, .comparison-formulas p { margin: 6px 0; }
+.comparison-source a { text-decoration: underline; }
+.comparison-formulas { display: grid; gap: 18px; }
+@media(max-width: 700px) { .comparison-form { grid-template-columns: repeat(2,minmax(0,1fr)); } .comparison-dialog { padding: 18px; } }

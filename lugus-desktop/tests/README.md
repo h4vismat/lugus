@@ -52,3 +52,13 @@ an existing target directory. No fixture runtime is linked into the native app.
 Build `npm run build` and `cargo build --manifest-path src-tauri/Cargo.toml --example portfolio_qa`, then run `node tests/portfolio-browser.cjs` and `node tests/portfolio-dashboard-browser.cjs`. The shared native QA bridge uses disposable SQLite databases; the dashboard harness supplies the existing managed-worker fixture as a historical provider. It covers chart ranges, keyboard inspection, source details, daily pages, holdings, drawer focus, 600px layout, refresh, unsent drafts, missing prices and offline reopening.
 
 `node tests/portfolio-live-browser.cjs` is an opt-in network check with the real bundled yfinance plugin and a labelled synthetic AAPL account. Install that plugin’s pinned dependencies first. Both browser harnesses accept `LUGUS_PLAYWRIGHT_MODULE` and `LUGUS_CHROMIUM`. They print artifact directories; downloaded live data is not committed.
+
+## Comparison acceptance
+
+```sh
+npm run build
+cargo build --manifest-path src-tauri/Cargo.toml --example comparison_qa
+LUGUS_PLAYWRIGHT_MODULE=/path/to/playwright LUGUS_CHROMIUM=/path/to/chromium node tests/comparison-browser.cjs
+```
+
+`LUGUS_COMPARISON_QA_BINARY` overrides the example executable. This harness uses disposable databases, the real native bridge, synthetic financial evidence, and no runtime or credentials. It covers creation, source/formula inspection, changed-evidence refresh, original-version preservation, partial results, backend restart with the provider removed, exact offline evidence, unsaved thesis retention, 600px layout and source-dialog focus restoration. Controller unit tests separately exercise stale responses and submission retries. Screenshot locations are printed on success or failure. Playwright and Chromium are testing prerequisites, not product dependencies.

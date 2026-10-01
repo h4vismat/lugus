@@ -8,6 +8,7 @@ mod freeze;
 mod history_evidence;
 mod passages;
 pub use passages::{PassageStore, PreparedText, TextPreparation, TextPreparationInput};
+mod comparison;
 mod portfolio;
 mod sqlite;
 mod views;
@@ -17,6 +18,19 @@ use lugus_financial::resolution::catalog::CatalogSelection;
 pub use sqlite::SqliteApplicationStore;
 
 pub trait ApplicationStore: Send {
+    fn comparison_store(&self) -> Result<&dyn crate::comparison::ComparisonStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "comparison storage unavailable",
+        ))
+    }
+    fn comparison_store_mut(&mut self) -> Result<&mut dyn crate::comparison::ComparisonStore> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "comparison storage unavailable",
+        ))
+    }
+
     fn history_evidence_page(
         &self,
         _scope: &Scope,

@@ -18,3 +18,5 @@ pub mod resolution;
 pub mod selection;
 
 pub mod instruments;
+
+pub mod comparison;

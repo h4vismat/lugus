@@ -78,16 +78,17 @@ impl Limits {
     /// No desktop research size or elapsed-time quotas. Read pages and queues
     /// stay finite so consumers can paginate and apply backpressure.
     pub fn unlimited_research() -> Self {
-        let mut limits = Self::default();
-        limits.operation_timeout = Duration::MAX;
-        limits.max_pages_per_fetch = isize::MAX as usize;
-        limits.max_items_per_fetch = isize::MAX as usize;
-        limits.max_bytes_per_fetch = isize::MAX as usize;
-        limits.max_document_bytes = isize::MAX as usize;
-        limits.max_input_bytes = isize::MAX as usize;
-        limits.max_output_bytes = isize::MAX as usize;
-        limits.max_read_page_bytes = isize::MAX as usize;
-        limits
+        Self {
+            operation_timeout: Duration::MAX,
+            max_pages_per_fetch: isize::MAX as usize,
+            max_items_per_fetch: isize::MAX as usize,
+            max_bytes_per_fetch: isize::MAX as usize,
+            max_document_bytes: isize::MAX as usize,
+            max_input_bytes: isize::MAX as usize,
+            max_output_bytes: isize::MAX as usize,
+            max_read_page_bytes: isize::MAX as usize,
+            ..Self::default()
+        }
     }
 
     pub const MAX_QUEUE_CAPACITY: usize = 100_000;

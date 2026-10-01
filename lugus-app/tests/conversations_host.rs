@@ -1351,12 +1351,11 @@ async fn fragmented_answer_stream_is_persisted_without_exhausting_activity_event
             .await
             .unwrap();
         for record in &page.items {
-            if record.kind == "runtime" {
-                if let RuntimeEvent::TextDelta { text: delta } =
+            if record.kind == "runtime"
+                && let RuntimeEvent::TextDelta { text: delta } =
                     serde_json::from_str(&record.data).unwrap()
-                {
-                    text.push_str(&delta);
-                }
+            {
+                text.push_str(&delta);
             }
         }
         if page.items.len() < 100 {
@@ -1377,12 +1376,11 @@ async fn buffered_text_flushes_while_runtime_is_still_running() {
         loop {
             let activity = host.activity(&c.id, &run.id, page()).await.unwrap();
             for record in activity.items {
-                if record.kind == "runtime" {
-                    if let RuntimeEvent::TextDelta { text } =
+                if record.kind == "runtime"
+                    && let RuntimeEvent::TextDelta { text } =
                         serde_json::from_str(&record.data).unwrap()
-                    {
-                        return text;
-                    }
+                {
+                    return text;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

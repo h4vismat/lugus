@@ -1,0 +1,98 @@
+export type CompanyId = { namespace: string; value: string };
+export type Subject = { text: string; exchange: string | null };
+export type Request = {
+  request_id: string;
+  subjects: readonly Subject[];
+  period_end: string;
+  years: number;
+  revenue_basis: string;
+  question?: string | null;
+  facts_instance?: string | null;
+  resolution_instance?: string | null;
+  previous_id?: string | null;
+};
+export type Input = Omit<Request, "request_id">;
+export type Ref = {
+  dataset_id: string;
+  ordinal: number;
+  observation_id: string;
+  fingerprint: string;
+};
+export type Issue = { code: string; detail: string; inputs: Ref[] };
+export type Amount = {
+  value: string | null;
+  inputs: Ref[];
+  filing_ids: string[];
+  issues: Issue[];
+};
+export type Cell = {
+  result: {
+    numerator: string;
+    denominator: string;
+    value: string;
+    display: string;
+  } | null;
+  inputs: Ref[];
+  formula: string;
+  issues: Issue[];
+};
+export type Row = {
+  company: CompanyId;
+  annual: {
+    start: string | null;
+    end: string;
+    days: number | null;
+    revenue: Amount;
+    net_income: Amount;
+    revenue_growth: Cell;
+    net_margin: Cell;
+    issues: Issue[];
+  };
+};
+export type Company = {
+  company: CompanyId;
+  name: string;
+  resolution_dataset_id: string;
+};
+export type Record = {
+  id: string;
+  package_id: string;
+  request: Request;
+  companies: Company[];
+  row_count: number;
+  source_count: number;
+  previous_id: string | null;
+  state: string;
+  created_at: string;
+  issues: Issue[];
+};
+export type Source = {
+  company: CompanyId;
+  metric: string;
+  input: Ref;
+  fact: {
+    value: string;
+    namespace: string;
+    concept: string;
+    unit: string;
+    period: { kind: string; start?: string; end?: string; date?: string };
+    filing_id: string;
+    filed: string;
+    source_url: string;
+    retrieved_at: string;
+  };
+};
+export type Job = {
+  id: string;
+  state: string;
+  comparison_id: string | null;
+  error: { message: string } | null;
+  owner?: string;
+};
+export type Provider = {
+  instance_id: string;
+  plugin_id: string;
+  plugin_version: string;
+};
+export type Providers = { facts: Provider[]; resolution: Provider[] };
+export type Page<T> = { items: T[]; next_offset: number | null };
